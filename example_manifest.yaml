@@ -1,0 +1,6 @@
+transfer_id: "wsi_test_transfer_001"
+received_files:
+  - filename: "test.h5"
+    dps_steps:
+      - ExampleDPSStep
+      - ExampleDPSStep

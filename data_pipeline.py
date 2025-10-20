@@ -3,6 +3,7 @@ import os
 import queue
 import sys
 import logging
+import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,19 @@ class DPSStep:
         raise NotImplementedError("Each step must implement the execute method.")
     
 
+class ExampleDPSStep(DPSStep):
+    """
+    An example implementation of a DPS step.
+    """
+    def __init__(self):
+        super().__init__("Example Step")
+
+    def execute(self, data: any) -> any:
+        logger.info("Executing example step.")
+        # Example processing logic
+        return data
+    
+
 
 class DataPreparationForExploitationService:
     """
@@ -55,9 +69,19 @@ class DataPreparationForExploitationService:
     def __init__(self, manifest_path:str):
         self.manifest_path:str = manifest_path
         self.pipeline: queue.Queue[DPSStep] = queue.Queue()
+        self.__parse_manifest__()
 
-    def parse_manifest(self):
+    def __parse_manifest__(self):
         logger.info("Parsing manifest: %s", self.manifest_path)
+        with open(self.manifest_path, 'r') as f:
+            manifest = yaml.safe_load(f) 
+            for file_info in manifest.get('received_files', []):
+                for step_name in file_info.get('dps_steps', []):
+                    if step_name == "ExampleDPSStep":
+                        step = ExampleDPSStep()
+                        self.pipeline.put(step)
+                    else:
+                        logger.warning("Unknown DPS step: %s", step_name)  
 
 
     def run(self):
