@@ -21,6 +21,31 @@ def parse_args(argv=None):
     return args
 
 
+class DPSPipeline:
+    """
+    Class representing a DPS pipeline.
+    Holds a sequence of data preparation steps to be executed.
+    """
+    def __init__(self, steps: list['DPSStep'] | None = None):
+        self.steps: queue.Queue = queue.Queue()
+        if steps:
+            self.steps.queue.extend(steps)
+
+
+    def add_step(self, step: 'DPSStep'):
+        self.steps.put(step)
+        
+    def add_steps(self, steps: list['DPSStep']):
+        for step in steps:
+            self.add_step(step)
+
+    def execute(self, data: any) -> any:
+        for step in self.steps.queue:
+            logger.info("Executing step: %s", step.name)
+            data = step.execute(data)
+        return data
+
+
 class DPSStep:
     """
     Base class for data preparation steps.
