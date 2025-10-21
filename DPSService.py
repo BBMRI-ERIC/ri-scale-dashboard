@@ -4,6 +4,8 @@ import queue
 import sys
 import logging
 import yaml
+from DPSPipeline import DPSPipeline
+from dpsstep.ExampleDPSStep import ExampleDPSStep
 
 logger = logging.getLogger(__name__)
 
@@ -17,67 +19,8 @@ def parse_args(argv=None):
 
     if not os.path.exists(args.manifest):
         parser.error(f"Manifest path not found: {args.manifest}")
-
+ 
     return args
-
-
-class DPSPipeline:
-    """
-    Class representing a DPS pipeline.
-    Holds a sequence of data preparation steps to be executed.
-    """
-    def __init__(self, steps: list['DPSStep'] | None = None):
-        self.steps: queue.Queue = queue.Queue()
-        if steps:
-            self.steps.queue.extend(steps)
-
-
-    def add_step(self, step: 'DPSStep'):
-        self.steps.put(step)
-        
-    def add_steps(self, steps: list['DPSStep']):
-        for step in steps:
-            self.add_step(step)
-
-    def execute(self, data: any) -> any:
-        for step in self.steps.queue:
-            logger.info("Executing step: %s", step.name)
-            data = step.execute(data)
-        return data
-
-
-class DPSStep:
-    """
-    Base class for data preparation steps.
-    Each step should implement the `execute` method.
-    """
-    def __init__(self, name:str):
-        self.name = name
-
-    def execute(self, data: any) -> any:
-        """
-        Execute the data preparation step.
-        Input:
-            data: The input data to be processed.
-        Output:
-            The processed data.
-        """
-        raise NotImplementedError("Each step must implement the execute method.")
-    
-
-class ExampleDPSStep(DPSStep):
-    """
-    An example implementation of a DPS step.
-    """
-    def __init__(self):
-        super().__init__("Example Step")
-
-    def execute(self, data: any) -> any:
-        logger.info("Executing example step.")
-        # Example processing logic
-        return data
-    
-
 
 class DataPreparationForExploitationService:
     """
@@ -93,10 +36,10 @@ class DataPreparationForExploitationService:
     """
     def __init__(self, manifest_path:str):
         self.manifest_path:str = manifest_path
-        self.pipeline: queue.Queue[DPSStep] = queue.Queue()
+        self.pipeline: DPSPipeline = DPSPipeline()
         self.__parse_manifest__()
 
-    def __parse_manifest__(self):
+    def __parse_manifest__(self): # Adapt this for correct manifest structure
         logger.info("Parsing manifest: %s", self.manifest_path)
         with open(self.manifest_path, 'r') as f:
             manifest = yaml.safe_load(f) 
@@ -104,7 +47,7 @@ class DataPreparationForExploitationService:
                 for step_name in file_info.get('dps_steps', []):
                     if step_name == "ExampleDPSStep":
                         step = ExampleDPSStep()
-                        self.pipeline.put(step)
+                        self.pipeline.add_step(step)
                     else:
                         logger.warning("Unknown DPS step: %s", step_name)  
 
@@ -113,10 +56,7 @@ class DataPreparationForExploitationService:
         logger.info("Running DPS on manifest: %s", self.manifest_path)
         
         data = None # TODO: Load initial data based on manifest
-        for step in self.pipeline.queue:
-            logger.info("Executing step: %s", step.name)
-            data = step.execute(data)
-        
+        processed_data = self.pipeline.execute(data)
         logger.info("Data preparation complete.")
 
 
