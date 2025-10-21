@@ -55,7 +55,7 @@ class DataPreparationForExploitationService:
     def run(self):
         logger.info("Running DPS on manifest: %s", self.manifest_path)
         
-        data = None # TODO: Load initial data based on manifest
+        data = {} # TODO: Load initial data based on manifest
         processed_data = self.pipeline.execute(data)
         logger.info("Data preparation complete.")
 

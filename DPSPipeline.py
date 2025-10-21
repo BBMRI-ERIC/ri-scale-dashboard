@@ -22,7 +22,7 @@ class DPSPipeline:
     def add_steps(self, steps: list['DPSStep']):
         self.steps.extend(steps)
 
-    def execute(self, data: any) -> any:
+    def execute(self, data: dict) -> dict:
         for step in self.steps:
             logger.info("Executing step: %s", step.name)
             data = step.execute(data)

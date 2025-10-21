@@ -10,7 +10,7 @@ class ExampleDPSStep(DPSStep):
     def __init__(self):
         super().__init__("Example Step")
 
-    def execute(self, data: any) -> any:
+    def execute(self, data: dict) -> dict:
         logger.info("Executing example step.")
         # Example processing logic
         return data
