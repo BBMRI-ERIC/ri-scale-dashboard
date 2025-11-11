@@ -1,0 +1,6 @@
+transfer_id: "wsi_test_transfer_001"
+received_files: 
+  - data_folder: "./RIScale/data"
+  - labels_file: "./RIScale/data/labels.csv"
+dps_steps:
+  - SVSDataLoaderStep
