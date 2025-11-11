@@ -19,7 +19,6 @@ def parse_args(argv=None):
 
     if not os.path.exists(args.manifest):
         parser.error(f"Manifest path not found: {args.manifest}")
-
     return args
 
 class DataPreparationForExploitationService:
