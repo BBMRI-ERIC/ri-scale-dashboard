@@ -49,6 +49,66 @@ class DataPreparationForExploitationService:
         self.manifest_path:str = manifest_path
         self.pipeline: DPSPipeline = DPSPipeline()
         self.__parse_manifest__()
+        
+    # helper to add a join step
+    def __handle_join__(self, params) -> bool:
+        left_source_name = params.get('left_source_name', '')
+        right_source_name = params.get('right_source_name', '')
+        join_type = params.get('join_type', 'inner')
+        output_source_name = params.get('output_source_name', f"{left_source_name}_{right_source_name}_joined")
+        left_key = params.get('left_key', 'slide_id')
+        right_key = params.get('right_key', 'slide_id')
+        missing_policy = params.get('missing_policy', 'drop')
+
+        if left_source_name not in self.sources:
+            logger.error("Left source for join not found: %s", left_source_name)
+            return False
+        if right_source_name not in self.sources:
+            logger.error("Right source for join not found: %s", right_source_name)
+            return False
+
+        left_source = self.sources[left_source_name]
+        right_source = self.sources[right_source_name]
+        output_source = Source(
+            source_name=output_source_name,
+            type=None  # Output source will be populated after join
+        )
+
+        self.pipeline.add_step(JoinStep(
+            left_source=left_source,
+            right_source=right_source,
+            output_source=output_source,
+            left_key=left_key,
+            right_key=right_key,
+            join_type=join_type,
+            missing_policy=missing_policy
+        ))
+
+        # register intermediate output source
+        self.sources[output_source_name] = output_source
+        return True
+
+    # helper to add the example DPS step
+    def __handle_example__(self, params) -> bool:
+        input_source_name = params.get('input_source_name', '')
+        output_source_name = params.get('output_source_name', 'example_output')
+
+        if input_source_name not in self.sources:
+            logger.error("Input source for example step not found: %s", input_source_name)
+            return False
+
+        input_source = self.sources[input_source_name]
+        output_source = Source(
+            source_name=output_source_name,
+            type=None  # Output source will be populated after step execution
+        )
+
+        example_step = ExampleDPSStep(input_source=input_source, output_source=output_source)
+        self.pipeline.add_step(example_step)
+
+        # register intermediate output source
+        self.sources[output_source_name] = output_source
+        return True
 
     def __parse_manifest__(self):
         """
@@ -74,7 +134,6 @@ class DataPreparationForExploitationService:
                             source_name=defined_source.get('source_name', 'csv_source'),
                             type=CSVFileStrategy(
                                 path=defined_source.get('path', ''),
-                                key_field=defined_source.get('params', {}).get('key_field', 'slide_id'),
                                 delimiter=defined_source.get('params', {}).get('delimiter', ','),
                                 header=defined_source.get('params', {}).get('header', True)
                             )
@@ -105,68 +164,19 @@ class DataPreparationForExploitationService:
                 step_name = step.get('step_name', '')
                 enabled = step.get('enabled', False)
                 params = step.get('params', {})
-                
+
                 match step_name:
                     case 'join':
                         if enabled:
-                            left_source_name = params.get('left_source_name', '')
-                            right_source_name = params.get('right_source_name', '')
-                            join_type = params.get('join_type', 'inner')
-                            output_source_name = params.get('output_source_name', f"{left_source_name}_{right_source_name}_joined")
-                            left_key = params.get('left_key', 'slide_id')
-                            right_key = params.get('right_key', 'slide_id')
-                            missing_policy = params.get('missing_policy', 'drop')
-                            
-                            if left_source_name not in self.sources:
-                                logger.error("Left source for join not found: %s", left_source_name)
+                            if not self.__handle_join__(params):
                                 continue
-                            if right_source_name not in self.sources:
-                                logger.error("Right source for join not found: %s", right_source_name)
-                                continue
-                            left_source = self.sources[left_source_name]
-                            right_source = self.sources[right_source_name]
-                            output_source = Source(
-                                source_name=output_source_name,
-                                type=None  # Output source will be populated after join
-                            )
-                            
-                            self.pipeline.add_step(JoinStep(
-                                left_source=left_source,
-                                right_source=right_source,
-                                output_source=output_source,
-                                left_key=left_key,
-                                right_key=right_key,
-                                join_type=join_type,
-                                missing_policy=missing_policy
-                            ))
-                            
-                            # Add intermediate source for step output
-                            self.sources[output_source_name] = output_source
-                            
                             logger.info("Added join step: %s", step_name)
                         else:
                             logger.info("Skipping disabled step: %s", step_name)
                     case 'ExampleDPSStep':
                         if enabled:
-                            input_source_name = params.get('input_source_name', '')
-                            output_source_name = params.get('output_source_name', 'example_output')
-                            
-                            if input_source_name not in self.sources:
-                                logger.error("Input source for example step not found: %s", input_source_name)
+                            if not self.__handle_example__(params):
                                 continue
-                            
-                            output_source = Source(
-                                source_name=output_source_name,
-                                type=None  # Output source will be populated after step execution
-                            )
-                            
-                            input_source = self.sources.get(input_source_name, None)
-                            example_step = ExampleDPSStep(input_source=input_source, output_source=output_source)
-                            self.pipeline.add_step(example_step)
-                            
-                            # Add intermediate source for step output
-                            self.sources[output_source_name] = output_source
-                            
                             logger.info("Added example DPS step: %s", step_name)
                         else:
                             logger.info("Skipping disabled step: %s", step_name)
