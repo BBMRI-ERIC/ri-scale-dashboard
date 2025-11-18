@@ -1,5 +1,3 @@
-from dpsdataset.Source import Source
-
 
 class DPSStep:
     """
@@ -9,13 +7,11 @@ class DPSStep:
     def __init__(self, name:str):
         self.name = name
 
-    def execute(self, data: Source) -> Source:
+    def execute(self) -> bool:
         """
         Execute the data preparation step.
-        Input:
-            data: The input data to be processed.
         Output:
-            The processed data.
+            bool: True if the step executed successfully, False otherwise.
         """
         raise NotImplementedError("Each step must implement the execute method.")
     

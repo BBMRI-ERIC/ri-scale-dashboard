@@ -1,3 +1,9 @@
+"""
+Data Preparation for Exploitation Service (DPS) module.
+USAGE EXAMPLE:
+    python DPSService.py -m ./example_manifest.yaml -v
+"""
+
 import argparse
 import os
 import queue
@@ -5,7 +11,6 @@ import sys
 import logging
 import yaml
 from DPSPipeline import DPSPipeline
-from dpsstep.SVSDataLoaderStep import SVSDataLoaderStep
 from dpsstep.ExampleDPSStep import ExampleDPSStep
 from dpsstep.JoinStep import JoinStep
 import pandas as pd
@@ -36,11 +41,20 @@ class DataPreparationForExploitationService:
     directly in workflows without further ad-hoc manipulation.
     """
     def __init__(self, manifest_path:str):
+        """
+        Initialize the DPS with a manifest file.
+        Args:
+            manifest_path (str): Path to the manifest YAML file defining sources and steps.
+        """
         self.manifest_path:str = manifest_path
         self.pipeline: DPSPipeline = DPSPipeline()
         self.__parse_manifest__()
 
     def __parse_manifest__(self):
+        """
+        Parse the manifest YAML file to initialize sources and steps.
+        """
+        
         logger.info("Parsing manifest: %s", self.manifest_path)
         with open(self.manifest_path, 'r') as f:
             manifest = yaml.safe_load(f) 
@@ -81,7 +95,7 @@ class DataPreparationForExploitationService:
                         self.sources[discovery_source.source_name] = discovery_source
                         
                     case 'step_output':
-                        logger.warning("Source type 'step_output' not yet implemented.")
+                        raise NotImplementedError("Source type 'step_output' is not implemented yet.")
                     case _:
                         logger.error("Unknown source type: %s", defined_source.get('type', ''))
         
@@ -111,16 +125,24 @@ class DataPreparationForExploitationService:
                                 continue
                             left_source = self.sources[left_source_name]
                             right_source = self.sources[right_source_name]
+                            output_source = Source(
+                                source_name=output_source_name,
+                                type=None  # Output source will be populated after join
+                            )
                             
                             self.pipeline.add_step(JoinStep(
                                 left_source=left_source,
                                 right_source=right_source,
+                                output_source=output_source,
                                 left_key=left_key,
                                 right_key=right_key,
                                 join_type=join_type,
-                                output_source_name=output_source_name,
                                 missing_policy=missing_policy
                             ))
+                            
+                            # Add intermediate source for step output
+                            self.sources[output_source_name] = output_source
+                            
                             logger.info("Added join step: %s", step_name)
                         else:
                             logger.info("Skipping disabled step: %s", step_name)
@@ -128,14 +150,23 @@ class DataPreparationForExploitationService:
                         if enabled:
                             input_source_name = params.get('input_source_name', '')
                             output_source_name = params.get('output_source_name', 'example_output')
-                            example_step = ExampleDPSStep()
+                            
+                            if input_source_name not in self.sources:
+                                logger.error("Input source for example step not found: %s", input_source_name)
+                                continue
+                            
+                            output_source = Source(
+                                source_name=output_source_name,
+                                type=None  # Output source will be populated after step execution
+                            )
+                            
+                            input_source = self.sources.get(input_source_name, None)
+                            example_step = ExampleDPSStep(input_source=input_source, output_source=output_source)
                             self.pipeline.add_step(example_step)
                             
                             # Add intermediate source for step output
-                            self.sources[output_source_name] = Source(
-                                source_name=output_source_name,
-                                type=None  # Placeholder, actual type would depend on step implementation
-                            )
+                            self.sources[output_source_name] = output_source
+                            
                             logger.info("Added example DPS step: %s", step_name)
                         else:
                             logger.info("Skipping disabled step: %s", step_name)
@@ -143,17 +174,23 @@ class DataPreparationForExploitationService:
                         logger.warning("Unknown DPS step: %s", step_name)
 
 
-    def run(self):
+    def run(self) -> bool:
+        """
+        Run the data preparation pipeline.
+        Returns:
+            bool: True if the pipeline executed successfully, False otherwise.
+        """
         logger.info("Running DPS on manifest: %s", self.manifest_path)
         
-        data_path = self.data_path
-    
-        processed_data = self.pipeline.execute(data_path)
+        status = self.pipeline.execute()
         logger.info("Data preparation complete.")
-        return processed_data
+        return status
 
 
 if __name__ == "__main__":
+    if "RIScale" not in os.getcwd():
+        os.chdir("RIScale")
+    
     args = parse_args()
     if args.verbose:
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -165,5 +202,3 @@ if __name__ == "__main__":
     logger.info("Arguments: %s", args)
     dps = DataPreparationForExploitationService(args.manifest)
     dps.run()
-    
-
