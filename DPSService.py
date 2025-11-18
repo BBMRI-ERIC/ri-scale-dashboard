@@ -127,6 +127,9 @@ class DataPreparationForExploitationService:
             defined_sources = manifest.get('sources', [])
             self.sources: dict[str, Source] = {}
             
+        # ------------------------------------------------------------------------------------
+        # Parse and add primary data sources used by the pipeline
+        # ------------------------------------------------------------------------------------
             for defined_source in defined_sources:
                 match defined_source.get('type', ''):
                     case 'csv_file':
@@ -158,7 +161,9 @@ class DataPreparationForExploitationService:
                     case _:
                         logger.error("Unknown source type: %s", defined_source.get('type', ''))
         
-
+        # -----------------------------------------------------------------------------------------
+        # Parse and add DPS steps and their intermediate data source results to the pipeline
+        # -----------------------------------------------------------------------------------------
             steps = manifest.get('dps_steps', manifest.get('job_steps', []))
             for step in steps:
                 step_name = step.get('step_name', '')
