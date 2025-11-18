@@ -1,3 +1,6 @@
+from dpsdataset.Source import Source
+
+
 class DPSStep:
     """
     Base class for data preparation steps.
@@ -6,7 +9,7 @@ class DPSStep:
     def __init__(self, name:str):
         self.name = name
 
-    def execute(self, data: any) -> any:
+    def execute(self, data: Source) -> Source:
         """
         Execute the data preparation step.
         Input:

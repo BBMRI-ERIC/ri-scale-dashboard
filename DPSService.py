@@ -7,7 +7,9 @@ import yaml
 from DPSPipeline import DPSPipeline
 from dpsstep.SVSDataLoaderStep import SVSDataLoaderStep
 from dpsstep.ExampleDPSStep import ExampleDPSStep
+from dpsstep.JoinStep import JoinStep
 import pandas as pd
+from dpsdataset.Source import DataSourceStrategy, FileDiscoveryStrategy, CSVFileStrategy, Source
 
 logger = logging.getLogger(__name__)
 
@@ -42,38 +44,103 @@ class DataPreparationForExploitationService:
         logger.info("Parsing manifest: %s", self.manifest_path)
         with open(self.manifest_path, 'r') as f:
             manifest = yaml.safe_load(f) 
-            received = manifest.get('received_files', {})
-            file_info = {}
-            if isinstance(received, dict):
-                file_info = received
-            elif isinstance(received, list):
-                for item in received:
-                    if isinstance(item, dict):
-                        file_info.update(item)
-                    else:
-                        logger.warning("Unexpected item in received_files list: %r", item)
+            manifest_id = manifest.get('manifest_id', {})
+            created_by = manifest.get('created_by', '')
+            created_at = manifest.get('created_at', '')
+            logger.info("Manifest ID: %s, created by: %s at %s",
+                        manifest_id, created_by, created_at)
+            
+            defined_sources = manifest.get('sources', [])
+            self.sources: dict[str, Source] = {}
+            
+            for defined_source in defined_sources:
+                match defined_source.get('type', ''):
+                    case 'csv_file':
+                        csv_source = Source(
+                            source_name=defined_source.get('source_name', 'csv_source'),
+                            type=CSVFileStrategy(
+                                path=defined_source.get('path', ''),
+                                key_field=defined_source.get('params', {}).get('key_field', 'slide_id'),
+                                delimiter=defined_source.get('params', {}).get('delimiter', ','),
+                                header=defined_source.get('params', {}).get('header', True)
+                            )
+                        )
+                        self.sources[csv_source.source_name] = csv_source                   
+                        
+                    case 'discovery':
+                        discovery_source = Source(
+                            source_name=defined_source.get('source_name', 'discovery_source'),
+                            type=FileDiscoveryStrategy(
+                                path=defined_source.get('path', ''),
+                                include=defined_source.get('params', {}).get('include', '*.svs'),
+                                recursive=defined_source.get('params', {}).get('recursive', False),
+                                id_pattern=defined_source.get('params', {}).get('id_pattern', '^(?P<slide_id>[^.]+)'),
+                                data_type=defined_source.get('params', {}).get('data_type', 'image')
+                            )
+                        )
+                        self.sources[discovery_source.source_name] = discovery_source
+                        
+                    case 'step_output':
+                        logger.warning("Source type 'step_output' not yet implemented.")
+                    case _:
+                        logger.error("Unknown source type: %s", defined_source.get('type', ''))
+        
 
-            self.data_path = file_info.get('data_folder', '')
-            self.labels_file = file_info.get('labels_file', '')
-
-            if self.labels_file:
-                self.labels = pd.read_csv(self.labels_file, sep=',')
-                try:
-                    self.labels = pd.read_csv(self.labels_file, sep=',')
-                except Exception:
-                    logger.exception("Failed to read labels file: %s", self.labels_file)
-                    self.labels = None
-
-            steps = manifest.get('dps_steps', file_info.get('dps_steps', []))
-            for step_name in steps:
-                if step_name == "SVSDataLoaderStep":
-                    step = SVSDataLoaderStep(recursive=False, labels=self.labels)
-                    self.pipeline.add_step(step)
-                elif step_name == "ExampleDPSStep":
-                    step = ExampleDPSStep()
-                    self.pipeline.add_step(step)
-                else:
-                    logger.warning("Unknown DPS step: %s", step_name)
+            steps = manifest.get('dps_steps', manifest.get('job_steps', []))
+            for step in steps:
+                step_name = step.get('step_name', '')
+                enabled = step.get('enabled', False)
+                params = step.get('params', {})
+                
+                match step_name:
+                    case 'join':
+                        if enabled:
+                            left_source_name = params.get('left_source_name', '')
+                            right_source_name = params.get('right_source_name', '')
+                            join_type = params.get('join_type', 'inner')
+                            output_source_name = params.get('output_source_name', f"{left_source_name}_{right_source_name}_joined")
+                            left_key = params.get('left_key', 'slide_id')
+                            right_key = params.get('right_key', 'slide_id')
+                            missing_policy = params.get('missing_policy', 'drop')
+                            
+                            if left_source_name not in self.sources:
+                                logger.error("Left source for join not found: %s", left_source_name)
+                                continue
+                            if right_source_name not in self.sources:
+                                logger.error("Right source for join not found: %s", right_source_name)
+                                continue
+                            left_source = self.sources[left_source_name]
+                            right_source = self.sources[right_source_name]
+                            
+                            self.pipeline.add_step(JoinStep(
+                                left_source=left_source,
+                                right_source=right_source,
+                                left_key=left_key,
+                                right_key=right_key,
+                                join_type=join_type,
+                                output_source_name=output_source_name,
+                                missing_policy=missing_policy
+                            ))
+                            logger.info("Added join step: %s", step_name)
+                        else:
+                            logger.info("Skipping disabled step: %s", step_name)
+                    case 'ExampleDPSStep':
+                        if enabled:
+                            input_source_name = params.get('input_source_name', '')
+                            output_source_name = params.get('output_source_name', 'example_output')
+                            example_step = ExampleDPSStep()
+                            self.pipeline.add_step(example_step)
+                            
+                            # Add intermediate source for step output
+                            self.sources[output_source_name] = Source(
+                                source_name=output_source_name,
+                                type=None  # Placeholder, actual type would depend on step implementation
+                            )
+                            logger.info("Added example DPS step: %s", step_name)
+                        else:
+                            logger.info("Skipping disabled step: %s", step_name)
+                    case _:
+                        logger.warning("Unknown DPS step: %s", step_name)
 
 
     def run(self):

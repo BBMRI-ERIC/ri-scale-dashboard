@@ -5,87 +5,36 @@ created_at: "2025-11-13T10:00:00Z"
 
 
 sources:
-  - id: slides
+  - source_name: source1
     type: discovery
-    description: "Folder of high-res SVS whole-slide images"
-    discovery:
-      path: "incoming/2025-11-13/slides/"
+    path: "./data/"
+    params:
+      data_type: "image"
       include: "*.svs"
       recursive: false
-      mime: "image/x-svs"
-    default_loader: wsi_loader
-    loader_params:
-      pyramid: true
-      preserve_mpp: true
-      filename_pattern: "^(?P<slide_id>[^_]+)" 
+      id_pattern: "^(?P<slide_id>[^.]+)" 
 
-  - id: labels_csv
-    type: file
-    description: "CSV file with features and labels"
-    path: "incoming/labels.csv"
-    default_loader: csv_loader
-    loader_params:
+  - source_name: source2
+    type: csv_file
+    path: "./data/labels.csv"
+    params:
       key_field: "slide_id"
       delimiter: ","
       header: true
 
-
-step_catalog:
-  - id: load_data
-    type: atomic
-    description: "Load source (discovered files or single file) into streaming Dataset"
-    file_scope: per-source
-    parallelizable: true
-    params_schema:
-      loader: {type: string, default: "auto"}
-      loader_params: {type: object, default: {}}
-
-  - id: combine_datasets
-    type: atomic
-    description: "Join two sources into paired records (data, label or merged record)"
-    file_scope: job
-    parallelizable: false
-    params_schema:
-      left_source: {type: string}         
-      right_source: {type: string}         
-      left_key: {type: string, default: "slide_id"}
-      right_key: {type: string, default: "slide_id"}
-      join_type: {type: string, enum: ["inner","left","outer"], default: "inner"}
-      output_record: {type: string, enum: ["merged","pair"], default: "pair"}
-      missing_policy: {type: string, enum: ["drop","null_label","raise"], default: "drop"}
-
-
 job_steps:
-  - id: load_data
-    enabled: true
-    target_source: slides
-    params:
-      loader: wsi_loader
-      loader_params:
-        pyramid: true
-        preserve_mpp: true
-  - id: load_data
-    enabled: true
-    target_source: labels_csv
-    params:
-      loader: csv_loader
-      loader_params:
-        key_field: slide_id
-        delimiter: ","
-  - id: combine_datasets
+  - step_name: join
     enabled: true
     params:
-      left_source: slides
-      right_source: labels_csv
+      left_source_name: source1
+      right_source_name: source2
+      output_source_name: source1_source2_joined
       left_key: slide_id
       right_key: slide_id
       join_type: inner
-      output_record: pair
       missing_policy: drop
-
-
-post_process:
-  - id: convert_to_ome_tiff
+  - step_name: ExampleDPSStep
     enabled: true
     params:
-      compression: "JPEG2000"
+      input_source_name: source1_source2_joined
+      output_source_name: processed_output
