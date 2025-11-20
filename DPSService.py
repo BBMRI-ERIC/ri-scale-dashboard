@@ -195,10 +195,15 @@ class DataPreparationForExploitationService:
         Returns:
             bool: True if the pipeline executed successfully, False otherwise.
         """
+        
         logger.info("Running DPS on manifest: %s", self.manifest_path)
         
-        status = self.pipeline.execute()
-        logger.info("Data preparation complete.")
+        status = True
+        while status:
+            status = self.pipeline.run_next_step()
+            
+            logger.info("Pipeline has %d steps left.", len(self.pipeline.steps))
+        logger.info("DPS Pipeline execution completed.")
         return status
 
 

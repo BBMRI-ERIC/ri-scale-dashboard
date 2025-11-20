@@ -27,7 +27,11 @@ class DPSPipeline:
 
 
     def execute(self) -> bool:
-        """Deprecated: Execute all steps in the pipeline sequentially."""
+        """
+        Deprecated: Execute all steps in the pipeline sequentially.
+        Returns:
+            bool: True if all steps executed successfully, False otherwise.
+        """
         overall_status = True
         
         for step in self.steps:
@@ -39,6 +43,9 @@ class DPSPipeline:
     
     
     def run_next_step(self) -> bool:
+        """Run the next step in the pipeline and remove it from the list of steps.
+        Returns:
+            bool: True if the step executed successfully, False otherwise."""
         if not self.steps:
             logger.warning("No steps in the pipeline to run.")
             return False
@@ -48,6 +55,11 @@ class DPSPipeline:
     
     
     def has_steps_left(self) -> bool:
+        """
+        Check if there are steps left in the pipeline.
+        Returns:
+            bool: True if there are steps left, False otherwise.
+        """
         return len(self.steps) > 0
     
 

@@ -15,6 +15,6 @@ class ImageCompressionStep(DPSStep):
     
     def execute(self) -> bool:
         
+        # Call image compression program here
         
-        
-        return False        # Implement image compression logic here
+        return False 

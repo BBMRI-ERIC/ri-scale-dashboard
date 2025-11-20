@@ -106,6 +106,8 @@ class CSVFileStrategy(DataSourceStrategy):
         return df
 
 class Source:
+    data: pd.DataFrame
+    
     def __init__(self, source_name:str, type:DataSourceStrategy):
         """Data source for DPS pipeline.
         Args:
