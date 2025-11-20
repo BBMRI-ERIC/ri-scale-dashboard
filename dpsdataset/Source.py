@@ -3,9 +3,41 @@ import glob
 import os
 import re
 import logging
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Optional
 
 from traitlets import Type
 logger = logging.getLogger(__name__)
+
+@dataclass
+class Record:
+    """
+    Standardized record object representing one logical item from a Source.
+    - metadata: all columns from the strategy's metadata DataFrame row
+    - file_path: optional path to file (if applicable)
+    - data_type: type hint (e.g., 'image', 'csv', ...)
+    - _loader: callable that returns the payload on demand
+    """
+    metadata: Dict[str, Any]
+    file_path: Optional[str] = None
+    data_type: Optional[str] = None
+    _loader: Optional[Callable[[], Any]] = field(default=None, repr=False)
+
+    def load(self) -> Any:
+        """Return the loaded payload using the strategy-provided loader.
+        For file-backed records this may return the path or raw bytes/stream depending on loader.
+        For CSV rows it may return a dict/Series representing the row."""
+        if self._loader:
+            return self._loader()
+        else:
+            return self.metadata
+
+    def open(self, mode: str = "rb"):
+        """Convenience to open file_path if present. Returns a file-like object.
+        Caller must close the returned object."""
+        if not self.file_path:
+            raise FileNotFoundError("No file path available for this record.")
+        return open(self.file_path, mode)
 
 class DataSourceStrategy():
     """Base class for data source strategies."""
@@ -21,6 +53,11 @@ class DataSourceStrategy():
     def get_data(self) -> pd.DataFrame:
         """return tuple of (path, data_type, id | None)"""
         raise NotImplementedError("Subclasses should implement this method.")
+    
+    def get_loader(self, row_dict: Dict[str, Any]) -> Callable[[], Any]:
+        """Return a callable that lazily loads the payload for a row.
+        Default implementation returns the row metadata."""
+        return lambda row=row_dict: row
 
     
 class FileDiscoveryStrategy(DataSourceStrategy):
@@ -79,6 +116,11 @@ class FileDiscoveryStrategy(DataSourceStrategy):
         
     def get_data(self) -> pd.DataFrame:
         return self.__discover_files__()
+    
+    def get_loader(self, row_dict: Dict[str, Any]) -> Callable[[], str]:
+        """Loader returns the file path by default (lazy)."""
+        path = row_dict.get("file_path")
+        return lambda p=path: p
 
 
 class CSVFileStrategy(DataSourceStrategy):
@@ -104,32 +146,74 @@ class CSVFileStrategy(DataSourceStrategy):
     def get_data(self) -> pd.DataFrame:
         df = pd.read_csv(self.path, sep=self.delimiter, header=0 if self.header else None)
         return df
+    
+    def get_loader(self, row_dict: Dict[str, Any]) -> Callable[[], Dict[str, Any]]:
+        """Return the row dict on demand."""
+        return lambda row=row_dict: row
 
 class Source:
-    data: pd.DataFrame
+    """
+    Standardized Source wrapper.
+    - self.data: pandas.DataFrame with metadata (keeps backward compatibility)
+    - self.records: list[Record] providing lazy access to payloads
+    """
+    data: Optional[pd.DataFrame]
+    records: List[Record]
     
-    def __init__(self, source_name:str, type:DataSourceStrategy):
-        """Data source for DPS pipeline.
-        Args:
-            source_name (str): Name of the data source.
-            type (DataSourceStrategy): Strategy to load the data. None for intermediate outputs that are pupulated later..
-        """
+    def __init__(self, source_name: str, type: Optional[DataSourceStrategy]):
         self.source_name = source_name
         self.type = type
-        if type is None: # intermediate source without data yet
+        self.records = []
+        if type is None:  # intermediate source without data yet
             self.data = None
+            logger.debug("Initialized intermediate Source '%s' without data.", self.source_name)
         else:
-            self.data: pd.DataFrame = self.type.get_data()
-            logger.info("Source '%s' loaded %d files of type '%s'", self.source_name, len(self.data), self.type.type)
+            self.data = self.type.get_data()
+            
+            if self.data is None:
+                self.records = []
+            else:
+                records: List[Record] = []
+                for row in self.data.to_dict(orient="records"):
+                    loader = self.type.get_loader(row)
+                    rec = Record(
+                        metadata=row,
+                        file_path=row.get("file_path"),
+                        data_type=row.get("data_type", getattr(self.type, "data_type", None)),
+                        _loader=loader
+                    )
+                    records.append(rec)
+                self.records = records
+
+            logger.info("Source '%s' loaded %d records of type '%s'", self.source_name, len(self.records), self.type.type)
         
         
-    def get_data(self) -> pd.DataFrame:
-        """
-        Get the data from the source.
-        Returns:
-            pandas.DataFrame: The data contained in the source.
-        """
+    def get_data(self) -> Optional[pd.DataFrame]:
+        """Return metadata DataFrame (backward-compatible)."""
         return self.data
+
+    def list_records(self) -> List[Record]:
+        """Return list of Record objects for lazy access."""
+        return self.records
+
+    def get_record_by_id(self, id_value: str, id_field: str = "id") -> Optional[Record]:
+        """Find a record by id field. Returns first match or None."""
+        for r in self.records:
+            if id_field in r.metadata and r.metadata[id_field] == id_value:
+                return r
+
+            if id_field == "id" and "slide_id" in r.metadata and r.metadata["slide_id"] == id_value:
+                return r
+        return None
+    
+    def to_dataframe(self) -> pd.DataFrame:
+        """Return the metadata DataFrame, re-built from records if needed."""
+        if self.data is not None:
+            return self.data
+        # if data missing but records present, build DataFrame
+        if self.records:
+            return pd.DataFrame.from_records([r.metadata for r in self.records])
+        return pd.DataFrame()
     
     
 if __name__ == "__main__":
@@ -140,11 +224,11 @@ if __name__ == "__main__":
     #discovery = DiscoveryType(path="./data/", include="*.svs", recursive=False, id_pattern=r"^(?P<id1>[^.]+)\.(?P<id2>[^.]+)(?:\..*)?\.svs$")
     #discovery = DiscoveryType(path="./data/", include="*.svs", recursive=False, id_pattern=r"^(.+?)(?=\.svs$)")
     source1 = Source(source_name="source1", type=discovery)
-    df1 = source1.get_data()
-    print(df1)
+    for rec in source1.list_records():
+        print(rec.file_path, rec.load())
 
-    csv_type = CSVFileStrategy(path="./data/labels.csv", key_field="id", delimiter=",", header=True)
+    csv_type = CSVFileStrategy(path="./data/labels.csv", delimiter=",", header=True)
     source2 = Source(source_name="source2", type=csv_type)
-    df2 = source2.get_data()
-    print(df2)
+    for rec in source2.list_records():
+        print(rec.file_path, rec.load())
 

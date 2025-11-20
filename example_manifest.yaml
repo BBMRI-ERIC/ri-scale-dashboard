@@ -9,7 +9,7 @@ sources:
     type: discovery
     path: "./data/"
     params:
-      data_type: "image"
+      data_type: "whole_slide_image"
       include: "*.svs"
       recursive: false
       id_pattern: "^(?P<slide_id>.+?)(?=\\.svs$)" 
