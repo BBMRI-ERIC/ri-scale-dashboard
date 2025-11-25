@@ -154,47 +154,38 @@ class CSVFileStrategy(DataSourceStrategy):
 class Source:
     """
     Standardized Source wrapper.
-    - self.data: pandas.DataFrame with metadata (keeps backward compatibility)
     - self.records: list[Record] providing lazy access to payloads
     """
-    data: Optional[pd.DataFrame]
     records: List[Record]
     
     def __init__(self, source_name: str, type: Optional[DataSourceStrategy]):
         self.source_name = source_name
         self.type = type
         self.records = []
+        
         if type is None:  # intermediate source without data yet
-            self.data = None
+            self.records = []
             logger.debug("Initialized intermediate Source '%s' without data.", self.source_name)
         else:
-            self.data = self.type.get_data()
-            
-            if self.data is None:
-                self.records = []
-            else:
-                records: List[Record] = []
-                for row in self.data.to_dict(orient="records"):
-                    loader = self.type.get_loader(row)
-                    rec = Record(
-                        metadata=row,
-                        file_path=row.get("file_path"),
-                        data_type=row.get("data_type", getattr(self.type, "data_type", None)),
-                        _loader=loader
-                    )
-                    records.append(rec)
-                self.records = records
+            records: List[Record] = []
+            for row in self.type.get_data().to_dict(orient="records"):
+                loader = self.type.get_loader(row)
+                rec = Record(
+                    metadata=row,
+                    file_path=row.get("file_path"),
+                    data_type=row.get("data_type", getattr(self.type, "data_type", None)),
+                    _loader=loader
+                )
+                records.append(rec)
+            self.records = records
 
-            logger.info("Source '%s' loaded %d records of type '%s'", self.source_name, len(self.records), self.type.type)
+        logger.info("Source '%s' loaded %d records of type '%s'", self.source_name, len(self.records), self.type.type if self.type else "intermediate")
         
         
-    def get_data(self) -> Optional[pd.DataFrame]:
-        """Return metadata DataFrame (backward-compatible)."""
-        return self.data
-
-    def list_records(self) -> List[Record]:
+    def get_data(self) -> List[Record]:
         """Return list of Record objects for lazy access."""
         return self.records
+
 
     def get_record_by_id(self, id_value: str, id_field: str = "id") -> Optional[Record]:
         """Find a record by id field. Returns first match or None."""
@@ -224,11 +215,12 @@ if __name__ == "__main__":
     #discovery = DiscoveryType(path="./data/", include="*.svs", recursive=False, id_pattern=r"^(?P<id1>[^.]+)\.(?P<id2>[^.]+)(?:\..*)?\.svs$")
     #discovery = DiscoveryType(path="./data/", include="*.svs", recursive=False, id_pattern=r"^(.+?)(?=\.svs$)")
     source1 = Source(source_name="source1", type=discovery)
-    for rec in source1.list_records():
+    for rec in source1.get_data():
         print(rec.file_path, rec.load())
+        print(rec.metadata)
 
     csv_type = CSVFileStrategy(path="./data/labels.csv", delimiter=",", header=True)
     source2 = Source(source_name="source2", type=csv_type)
-    for rec in source2.list_records():
+    for rec in source2.get_data():
         print(rec.file_path, rec.load())
 

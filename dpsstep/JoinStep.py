@@ -19,6 +19,7 @@ class JoinStep(DPSStep):
             join_type (str): The type of join to perform (e.g., 'inner', 'left', 'right', 'outer').
             missing_policy (str): Policy for handling missing data ('drop', 'fill', etc.). # Not implemented yet.
         """
+        
         super().__init__("Join Step")
         self.left_source = left_source
         self.right_source = right_source
