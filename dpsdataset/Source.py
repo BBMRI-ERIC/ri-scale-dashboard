@@ -10,35 +10,137 @@ from traitlets import Type
 logger = logging.getLogger(__name__)
 
 @dataclass
-class Record:
+class DataWithMetadata:
     """
-    Standardized record object representing one logical item from a Source.
-    - metadata: all columns from the strategy's metadata DataFrame row
-    - file_path: optional path to file (if applicable)
-    - data_type: type hint (e.g., 'image', 'csv', ...)
-    - _loader: callable that returns the payload on demand
+    Helper class to represent a DataFrame element with associated metadata.
+    - data_type: type of data in the column (e.g., 'int', 'float', 'string', 'image', etc.)
+    - loaded: whether the data is loaded in memory
+    - loaded_data: the actual data if loaded
+    - load_path: path to load the data from if not loaded
+    - loader: callable to load the data from load_path
     """
-    metadata: Dict[str, Any]
-    file_path: Optional[str] = None
-    data_type: Optional[str] = None
-    _loader: Optional[Callable[[], Any]] = field(default=None, repr=False)
-
-    def load(self) -> Any:
-        """Return the loaded payload using the strategy-provided loader.
-        For file-backed records this may return the path or raw bytes/stream depending on loader.
-        For CSV rows it may return a dict/Series representing the row."""
-        if self._loader:
-            return self._loader()
+    def __init__(self, data_type: str, loaded_data: Optional[pd.Series] = None, load_path: Optional[str] = None, loader: Optional[Callable] = None):
+        
+        if loaded_data is not None:
+            self.loaded = True
+            self.loaded_data = loaded_data
         else:
-            return self.metadata
+            self.loaded = False
+            self.loaded_data = None
+            
+        if not self.loaded_data and (load_path  is None and loader is None):
+            raise ValueError("Either loaded_data or load_path/loader must be provided.")
+        
+        self.data_type = data_type
+        self.load_path = load_path
+        self.loader = loader
+        
+    def __repr__(self):
+        return f"Data(data_type={self.data_type}, loaded={self.loaded})"
+    
+    def __str__(self):
+        return self.__repr__()
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "column_name": self.column_name,
+            "data_type": self.data_type,
+            "loaded": self.loaded,
+            "load_path": self.load_path,
+            "loaded_data": self.loaded_data
+        }
+        
+    def load_data(self):
+        """Load the data from load_path if not already loaded."""
+        if self.loaded:
+            return self.loaded_data
+        if self.loader:
+            self.loaded_data = self.loader(self.load_path)
+            self.loaded = True
+        else:
+            raise ValueError("No loader function provided to load data.") # should never happen
+        
+        return self.loaded_data
+    
+    def is_loaded(self) -> bool:
+        """Check if the data is loaded."""
+        return self.loaded
+    
+    def unload_data(self):
+        """Unload the data to free memory."""
+        if self.loaded_data is not None:
+            self.loaded_data = None
+            self.loaded = False
+        else:
+            logger.warning("Data is already unloaded.")
+            
+    def get_data(self) -> Optional[pd.Series]:
+        """Get the loaded data, or try to load if not loaded."""
+        if not self.loaded:
+            return self.load_data()
+        
+        return self.loaded_data
+    
 
-    def open(self, mode: str = "rb"):
-        """Convenience to open file_path if present. Returns a file-like object.
-        Caller must close the returned object."""
-        if not self.file_path:
-            raise FileNotFoundError("No file path available for this record.")
-        return open(self.file_path, mode)
+class LazyRow:
+    def __init__(self, row, field_loaders:dict[str, callable]):
+        self._row = row
+        self._field_loaders = field_loaders
+        self._cache: dict[str, object] = {}
+        
+    def __getitem__(self, key: str):
+        if key in self._cache:
+            return self._cache[key]
+        
+        if key in self._field_loaders:
+            loader = self._field_loaders[key]
+            if loader == None:
+                value = self._row[key]
+            else:
+                value = loader(self._row)
+                
+            self._cache[key] = value
+            
+            return value
+        
+        raise KeyError(f"Key {key} not found in LazyRow.")
 
+
+class Dataframe(pd.DataFrame):
+    """
+    Custom DataFrame that supports lazy loading of fields using provided loaders.
+    """
+    def __init__(self, data, index, columns, dtype, copy, field_loaders: dict[str, callable]):
+        """Initialize the Dataframe with lazy loading capabilities.
+        
+        Args:
+            data: ndarray (structured or homogeneous), Iterable, dict, or DataFrame
+                Dict can contain Series, arrays, constants, dataclass or list-like objects. If data is a dict, column order follows insertion-order. If a dict contains Series which have an index defined, it is aligned by its index. This alignment also occurs if data is a Series or a DataFrame itself. Alignment is done on Series/DataFrame inputs. If data is a list of dicts, column order follows insertion-order.
+
+            index: Index or array-like
+                Index to use for resulting frame. Will default to RangeIndex if no indexing information part of input data and no index provided.
+
+            columns: Index or array-like
+                Column labels to use for resulting frame when data does not have them, defaulting to RangeIndex(0, 1, 2, ..., n). If data contains column labels, will perform column selection instead.
+
+            dtype: dtype, default None
+                Data type to force. Only a single dtype is allowed. If None, infer.
+
+            copy: bool or None, default None
+                Copy data from inputs. For dict data, the default of None behaves like copy=True. For DataFrame or 2d ndarray input, the default of None behaves like copy=False. If data is a dict containing one or more Series (possibly of different dtypes), copy=False will ensure that these inputs are not copied.
+
+            field_loaders: dict[str, callable]
+                Dictionary mapping column names to loader functions for lazy loading.
+        """
+        super().__init__(data, index=index, columns=columns, dtype=dtype, copy=copy)
+        self._field_loaders = field_loaders
+        
+        
+    def __getitem__(self, key: str):
+        row = self.iloc[key]
+        return LazyRow(row, self._field_loaders)
+    
+        
 class DataSourceStrategy():
     """Base class for data source strategies."""
     
@@ -102,20 +204,24 @@ class FileDiscoveryStrategy(DataSourceStrategy):
                 continue
             group_dict = match.groupdict()
 
-            row = {"file_path": file, "data_type": self.data_type}
-
+            element = DataWithMetadata(data_type=self.data_type, load_path=file, loader=lambda p=file: p) # TODO: change loader to actual data loader
+            row = {}
             if group_dict:
                 row.update(group_dict)
             else:
                 row["id"] = match.group(0)
-
-            results.append(row)
+                
+            row["values"] = element
             
-        df = pd.DataFrame.from_records(results)
+            results.append(row)
+        
+        df = pd.DataFrame(results)
         return df
+    
         
     def get_data(self) -> pd.DataFrame:
-        return self.__discover_files__()
+        return self.__discover_files__().to_dict(orient="records")
+    
     
     def get_loader(self, row_dict: Dict[str, Any]) -> Callable[[], str]:
         """Loader returns the file path by default (lazy)."""
@@ -143,70 +249,34 @@ class CSVFileStrategy(DataSourceStrategy):
         self.data_type = "csv"
         
         
-    def get_data(self) -> pd.DataFrame:
+    def get_data(self) -> List[Dict[str, Any]]:
         df = pd.read_csv(self.path, sep=self.delimiter, header=0 if self.header else None)
-        return df
+        return df.to_dict(orient="records")
     
     def get_loader(self, row_dict: Dict[str, Any]) -> Callable[[], Dict[str, Any]]:
         """Return the row dict on demand."""
         return lambda row=row_dict: row
 
+
 class Source:
-    """
-    Standardized Source wrapper.
-    - self.records: list[Record] providing lazy access to payloads
-    """
-    records: List[Record]
-    
-    def __init__(self, source_name: str, type: Optional[DataSourceStrategy]):
+    def __init__(self, source_name: str, data_source_strategy: Optional[DataSourceStrategy]):
+        """
+        Initialize the Source.
+        Args:
+            source_name (str): Name of the data source.
+            data_source_strategy (DataSourceStrategy): Strategy to load data from the source.
+        """
         self.source_name = source_name
-        self.type = type
-        self.records = []
+        self.data_source_strategy = data_source_strategy
         
-        if type is None:  # intermediate source without data yet
-            self.records = []
-            logger.debug("Initialized intermediate Source '%s' without data.", self.source_name)
-        else:
-            records: List[Record] = []
-            for row in self.type.get_data().to_dict(orient="records"):
-                loader = self.type.get_loader(row)
-                rec = Record(
-                    metadata=row,
-                    file_path=row.get("file_path"),
-                    data_type=row.get("data_type", getattr(self.type, "data_type", None)),
-                    _loader=loader
-                )
-                records.append(rec)
-            self.records = records
-
-        logger.info("Source '%s' loaded %d records of type '%s'", self.source_name, len(self.records), self.type.type if self.type else "intermediate")
+        self._data: Optional[pd.DataFrame] = data_source_strategy.get_data() if data_source_strategy else None
         
         
-    def get_data(self) -> List[Record]:
-        """Return list of Record objects for lazy access."""
-        return self.records
+    def get_data(self) -> Optional[pd.DataFrame]:
+        """Get the data from the source."""
+        return self._data
+        
 
-
-    def get_record_by_id(self, id_value: str, id_field: str = "id") -> Optional[Record]:
-        """Find a record by id field. Returns first match or None."""
-        for r in self.records:
-            if id_field in r.metadata and r.metadata[id_field] == id_value:
-                return r
-
-            if id_field == "id" and "slide_id" in r.metadata and r.metadata["slide_id"] == id_value:
-                return r
-        return None
-    
-    def to_dataframe(self) -> pd.DataFrame:
-        """Return the metadata DataFrame, re-built from records if needed."""
-        if self.data is not None:
-            return self.data
-        # if data missing but records present, build DataFrame
-        if self.records:
-            return pd.DataFrame.from_records([r.metadata for r in self.records])
-        return pd.DataFrame()
-    
-    
 if __name__ == "__main__":
     # Example usage
     os.chdir("RIScale")
@@ -214,13 +284,12 @@ if __name__ == "__main__":
     discovery = FileDiscoveryStrategy(path="./data/", include="*.svs", recursive=False, id_pattern=r"^(?P<slide_id>.+?)(?=\.svs$)")
     #discovery = DiscoveryType(path="./data/", include="*.svs", recursive=False, id_pattern=r"^(?P<id1>[^.]+)\.(?P<id2>[^.]+)(?:\..*)?\.svs$")
     #discovery = DiscoveryType(path="./data/", include="*.svs", recursive=False, id_pattern=r"^(.+?)(?=\.svs$)")
-    source1 = Source(source_name="source1", type=discovery)
+    source1 = Source(source_name="source1", data_source_strategy=discovery)
     for rec in source1.get_data():
-        print(rec.file_path, rec.load())
-        print(rec.metadata)
-
+        print(rec)
+        
     csv_type = CSVFileStrategy(path="./data/labels.csv", delimiter=",", header=True)
-    source2 = Source(source_name="source2", type=csv_type)
+    source2 = Source(source_name="source2", data_source_strategy=csv_type)
     for rec in source2.get_data():
-        print(rec.file_path, rec.load())
+        print(rec)
 
