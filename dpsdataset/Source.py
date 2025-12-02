@@ -46,7 +46,8 @@ class LazySeries:
     def __getitem__(self, index):
         if isinstance(index, int):
             value = self._series.iloc[index]
-            value = self._loader(value)
+            if self._loader is not None:
+                value = self._loader(value)
             return value
         else:
             return self._series.__getitem__(index)
@@ -71,7 +72,7 @@ class LazyDataFrame():
         result = self._dataframe.__getitem__(key)
         
         if isinstance(result, pd.Series):
-            result = LazySeries(result, key, self._field_loaders[key])
+            result = LazySeries(result, key, self._field_loaders.get(key, None))
         elif isinstance(result, pd.DataFrame):
             result = LazyDataFrame(result, field_loaders=self._field_loaders)
         else:
@@ -147,7 +148,6 @@ class DataSourceStrategy():
 def example_loader(path):
     print(f"Loading data from path: {path}")
     return f"<LoadedObject: {path}>"
-
     
 class FileDiscoveryStrategy(DataSourceStrategy):
     """
@@ -192,7 +192,7 @@ class FileDiscoveryStrategy(DataSourceStrategy):
                 continue
             group_dict = match.groupdict()
 
-            element = file #DataWithMetadata(data_type=self.data_type, load_path=file, loader=lambda p=file: p) # TODO: change loader to actual data loader
+            element = file
             row = {}
             if group_dict:
                 row.update(group_dict)
@@ -264,27 +264,24 @@ if __name__ == "__main__":
     discovery = FileDiscoveryStrategy(path="./data/", include="*.svs", recursive=False, id_pattern=r"^(?P<slide_id>.+?)(?=\.svs$)")
     #discovery = DiscoveryType(path="./data/", include="*.svs", recursive=False, id_pattern=r"^(?P<id1>[^.]+)\.(?P<id2>[^.]+)(?:\..*)?\.svs$")
     #discovery = DiscoveryType(path="./data/", include="*.svs", recursive=False, id_pattern=r"^(.+?)(?=\.svs$)")
+    
     source1 = Source(source_name="source1", data_source_strategy=discovery)
     
-    df = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
-    print("\n", df["a"][1], "\n")
-    # for rec in df["a"]:
-    #     print(rec)
         
     
-    # print(source1.get_data())
+    print(source1.get_data())
     
-    # for rec in source1.get_data()["path"]:
-    #     print(rec)
-        
-    # print(source1.get_data()._field_loaders)
+    for rec in source1.get_data()["path"]:
+        print(rec)
         
     csv_type = CSVFileStrategy(path="./data/labels.csv", delimiter=",", header=True)
     source2 = Source(source_name="source2", data_source_strategy=csv_type)
-    #for rec in source2.get_data().iterrows():
-    #   print(rec)
-        # for x in rec:
-        #     print(x)
+    
+    for rec in source2.get_data().iterrows():
+        print(rec)
+        for x in rec:
+            print(x)
+        print("")
 
     merged = source1.get_data()
     merged = merged.merge(source2.get_data(), left_on="slide_id", right_on="slide_id", how="left")
@@ -295,7 +292,10 @@ if __name__ == "__main__":
         print(row)
         
     # access LazyRow
-    print("\n", merged["path"], "\n")
+    print("access LazyRow:\n", merged["path"], "\n")
     
     #lazy_loading
-    print("\n", merged["path"][1], "\n")
+    print("lazy loaded:\n", merged["path"][1], "\n")
+    
+    #non lazy access
+    print("non lazy loaded:\n", merged["slide_id"][1], "\n")
