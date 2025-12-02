@@ -8,78 +8,6 @@ from typing import Any, Callable, Dict, List, Optional
 
 from traitlets import Type
 logger = logging.getLogger(__name__)
-
-@dataclass
-class DataWithMetadata:
-    """
-    Helper class to represent a DataFrame element with associated metadata.
-    - data_type: type of data in the column (e.g., 'int', 'float', 'string', 'image', etc.)
-    - loaded: whether the data is loaded in memory
-    - loaded_data: the actual data if loaded
-    - load_path: path to load the data from if not loaded
-    - loader: callable to load the data from load_path
-    """
-    def __init__(self, data_type: str, loaded_data: Optional[pd.Series] = None, load_path: Optional[str] = None, loader: Optional[Callable] = None):
-        
-        if loaded_data is not None:
-            self.loaded = True
-            self.loaded_data = loaded_data
-        else:
-            self.loaded = False
-            self.loaded_data = None
-            
-        if not self.loaded_data and (load_path  is None and loader is None):
-            raise ValueError("Either loaded_data or load_path/loader must be provided.")
-        
-        self.data_type = data_type
-        self.load_path = load_path
-        self.loader = loader
-        
-    def __repr__(self):
-        return f"Data(data_type={self.data_type}, loaded={self.loaded})"
-    
-    def __str__(self):
-        return self.__repr__()
-    
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "column_name": self.column_name,
-            "data_type": self.data_type,
-            "loaded": self.loaded,
-            "load_path": self.load_path,
-            "loaded_data": self.loaded_data
-        }
-        
-    def load_data(self):
-        """Load the data from load_path if not already loaded."""
-        if self.loaded:
-            return self.loaded_data
-        if self.loader:
-            self.loaded_data = self.loader(self.load_path)
-            self.loaded = True
-        else:
-            raise ValueError("No loader function provided to load data.") # should never happen
-        
-        return self.loaded_data
-    
-    def is_loaded(self) -> bool:
-        """Check if the data is loaded."""
-        return self.loaded
-    
-    def unload_data(self):
-        """Unload the data to free memory."""
-        if self.loaded_data is not None:
-            self.loaded_data = None
-            self.loaded = False
-        else:
-            logger.warning("Data is already unloaded.")
-            
-    def get_data(self) -> Optional[pd.Series]:
-        """Get the loaded data, or try to load if not loaded."""
-        if not self.loaded:
-            return self.load_data()
-        
-        return self.loaded_data
     
 
 class LazyRow:
@@ -104,43 +32,101 @@ class LazyRow:
             return value
         
         raise KeyError(f"Key {key} not found in LazyRow.")
+    
+    def __repr__(self):
+        return self._row.__repr__()
 
 
-class Dataframe(pd.DataFrame):
+class LazySeries:
+    def __init__(self, series: pd.Series, col:str, loader:Callable):
+        self._series = series
+        self._col = col
+        self._loader = loader
+
+    def __getitem__(self, index):
+        if isinstance(index, int):
+            value = self._series.iloc[index]
+            value = self._loader(value)
+            return value
+        else:
+            return self._series.__getitem__(index)
+        
+        
+    def __repr__(self):
+        return self._series.__repr__()
+
+class LazyDataFrame():
     """
     Custom DataFrame that supports lazy loading of fields using provided loaders.
     """
-    def __init__(self, data, index, columns, dtype, copy, field_loaders: dict[str, callable]):
-        """Initialize the Dataframe with lazy loading capabilities.
-        
-        Args:
-            data: ndarray (structured or homogeneous), Iterable, dict, or DataFrame
-                Dict can contain Series, arrays, constants, dataclass or list-like objects. If data is a dict, column order follows insertion-order. If a dict contains Series which have an index defined, it is aligned by its index. This alignment also occurs if data is a Series or a DataFrame itself. Alignment is done on Series/DataFrame inputs. If data is a list of dicts, column order follows insertion-order.
-
-            index: Index or array-like
-                Index to use for resulting frame. Will default to RangeIndex if no indexing information part of input data and no index provided.
-
-            columns: Index or array-like
-                Column labels to use for resulting frame when data does not have them, defaulting to RangeIndex(0, 1, 2, ..., n). If data contains column labels, will perform column selection instead.
-
-            dtype: dtype, default None
-                Data type to force. Only a single dtype is allowed. If None, infer.
-
-            copy: bool or None, default None
-                Copy data from inputs. For dict data, the default of None behaves like copy=True. For DataFrame or 2d ndarray input, the default of None behaves like copy=False. If data is a dict containing one or more Series (possibly of different dtypes), copy=False will ensure that these inputs are not copied.
-
-            field_loaders: dict[str, callable]
-                Dictionary mapping column names to loader functions for lazy loading.
-        """
-        super().__init__(data, index=index, columns=columns, dtype=dtype, copy=copy)
+    
+    _dataframe: pd.DataFrame = None
+    _field_loaders: dict[str, callable] = {}
+    
+    def __init__(self, data=None, index=None, columns=None, dtype=None, copy=False, field_loaders: dict[str, callable] = {}):
+        self._dataframe = pd.DataFrame(data, index=index, columns=columns, dtype=dtype, copy=copy)
         self._field_loaders = field_loaders
         
+    def __getitem__(self, key):
+        result = self._dataframe.__getitem__(key)
         
-    def __getitem__(self, key: str):
-        row = self.iloc[key]
-        return LazyRow(row, self._field_loaders)
+        if isinstance(result, pd.Series):
+            result = LazySeries(result, key, self._field_loaders[key])
+        elif isinstance(result, pd.DataFrame):
+            result = LazyDataFrame(result, field_loaders=self._field_loaders)
+        else:
+            result = LazyRow(result, self._field_loaders)
+        
+        logger.debug(f"Accessing key {key} in LazyDataFrame")
+        return result
     
+    def iterrows(self):
+        for index, row in self._dataframe.iterrows():
+            yield index, LazyRow(row, self._field_loaders)
+            
+    def itertuples(self):
+        for row in self._dataframe.itertuples():
+            yield row
+    
+    def __iter__(self):
+        return iter(self._dataframe)
+    
+    
+    def __repr__(self):
+        return self._dataframe.__repr__()
+    
+    
+    def merge(self, right, how="inner", on=None, left_on=None, right_on=None, left_index=False, right_index=False, sort=False, suffixes=('_x', '_y'), copy=True, indicator=False, validate=None):
+        """
+        Merge two DataFrames and combine field loaders from LazyDataFrame inputs.
+        """
         
+        left_df = self._dataframe
+        right_df = right._dataframe if isinstance(right, LazyDataFrame) else right
+        
+        merged_df = left_df.merge(
+            right_df,
+            how=how,
+            on=on,
+            left_on=left_on,
+            right_on=right_on,
+            left_index=left_index,
+            right_index=right_index,
+            sort=sort,
+            suffixes=suffixes,
+            copy=copy,
+            indicator=indicator,
+            validate=validate
+        )
+        
+        merged_field_loaders = dict(self._field_loaders or {})
+        right_loaders = getattr(right, "_field_loaders", None)
+        if right_loaders:
+            merged_field_loaders.update(right_loaders)
+        
+        return LazyDataFrame(merged_df, field_loaders=merged_field_loaders)
+    
+    
 class DataSourceStrategy():
     """Base class for data source strategies."""
     
@@ -152,14 +138,15 @@ class DataSourceStrategy():
         self.type = type
 
 
-    def get_data(self) -> pd.DataFrame:
+    def get_data(self) -> LazyDataFrame:
         """return tuple of (path, data_type, id | None)"""
         raise NotImplementedError("Subclasses should implement this method.")
     
-    def get_loader(self, row_dict: Dict[str, Any]) -> Callable[[], Any]:
-        """Return a callable that lazily loads the payload for a row.
-        Default implementation returns the row metadata."""
-        return lambda row=row_dict: row
+
+    
+def example_loader(path):
+    print(f"Loading data from path: {path}")
+    return f"<LoadedObject: {path}>"
 
     
 class FileDiscoveryStrategy(DataSourceStrategy):
@@ -167,7 +154,7 @@ class FileDiscoveryStrategy(DataSourceStrategy):
     Strategy to discover files in a directory based on a pattern.
     """
     
-    def __init__(self, path:str, include:str="*.svs", recursive:bool=False, id_pattern:str="^(?P<slide_id>[^.]+)", data_type:str="image"):
+    def __init__(self, path:str, include:str="*.svs", recursive:bool=False, id_pattern:str="^(?P<slide_id>[^.]+)", data_type:str="image", column_name:str="path"):
         """
         Initialize the FileDiscoveryStrategy.
         Args:
@@ -187,6 +174,7 @@ class FileDiscoveryStrategy(DataSourceStrategy):
         self.recursive = recursive
         self.id_pattern = id_pattern
         self.data_type = data_type
+        self.column_name = column_name
         
         
     def __discover_files__(self):
@@ -204,29 +192,24 @@ class FileDiscoveryStrategy(DataSourceStrategy):
                 continue
             group_dict = match.groupdict()
 
-            element = DataWithMetadata(data_type=self.data_type, load_path=file, loader=lambda p=file: p) # TODO: change loader to actual data loader
+            element = file #DataWithMetadata(data_type=self.data_type, load_path=file, loader=lambda p=file: p) # TODO: change loader to actual data loader
             row = {}
             if group_dict:
                 row.update(group_dict)
             else:
                 row["id"] = match.group(0)
                 
-            row["values"] = element
+            row[self.column_name] = element
             
             results.append(row)
         
-        df = pd.DataFrame(results)
+        df = LazyDataFrame(results, field_loaders={self.column_name: example_loader})  # TODO: change loader to actual data loader
         return df
     
         
-    def get_data(self) -> pd.DataFrame:
-        return self.__discover_files__().to_dict(orient="records")
+    def get_data(self) -> LazyDataFrame:
+        return self.__discover_files__()
     
-    
-    def get_loader(self, row_dict: Dict[str, Any]) -> Callable[[], str]:
-        """Loader returns the file path by default (lazy)."""
-        path = row_dict.get("file_path")
-        return lambda p=path: p
 
 
 class CSVFileStrategy(DataSourceStrategy):
@@ -249,13 +232,10 @@ class CSVFileStrategy(DataSourceStrategy):
         self.data_type = "csv"
         
         
-    def get_data(self) -> List[Dict[str, Any]]:
+    def get_data(self) -> LazyDataFrame:
         df = pd.read_csv(self.path, sep=self.delimiter, header=0 if self.header else None)
-        return df.to_dict(orient="records")
+        return LazyDataFrame(df)
     
-    def get_loader(self, row_dict: Dict[str, Any]) -> Callable[[], Dict[str, Any]]:
-        """Return the row dict on demand."""
-        return lambda row=row_dict: row
 
 
 class Source:
@@ -272,7 +252,7 @@ class Source:
         self._data: Optional[pd.DataFrame] = data_source_strategy.get_data() if data_source_strategy else None
         
         
-    def get_data(self) -> Optional[pd.DataFrame]:
+    def get_data(self) -> Optional[LazyDataFrame]:
         """Get the data from the source."""
         return self._data
         
@@ -285,11 +265,37 @@ if __name__ == "__main__":
     #discovery = DiscoveryType(path="./data/", include="*.svs", recursive=False, id_pattern=r"^(?P<id1>[^.]+)\.(?P<id2>[^.]+)(?:\..*)?\.svs$")
     #discovery = DiscoveryType(path="./data/", include="*.svs", recursive=False, id_pattern=r"^(.+?)(?=\.svs$)")
     source1 = Source(source_name="source1", data_source_strategy=discovery)
-    for rec in source1.get_data():
-        print(rec)
+    
+    df = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
+    print("\n", df["a"][1], "\n")
+    # for rec in df["a"]:
+    #     print(rec)
+        
+    
+    # print(source1.get_data())
+    
+    # for rec in source1.get_data()["path"]:
+    #     print(rec)
+        
+    # print(source1.get_data()._field_loaders)
         
     csv_type = CSVFileStrategy(path="./data/labels.csv", delimiter=",", header=True)
     source2 = Source(source_name="source2", data_source_strategy=csv_type)
-    for rec in source2.get_data():
-        print(rec)
+    #for rec in source2.get_data().iterrows():
+    #   print(rec)
+        # for x in rec:
+        #     print(x)
 
+    merged = source1.get_data()
+    merged = merged.merge(source2.get_data(), left_on="slide_id", right_on="slide_id", how="left")
+    
+    print(merged)
+    
+    for row in merged.itertuples():
+        print(row)
+        
+    # access LazyRow
+    print("\n", merged["path"], "\n")
+    
+    #lazy_loading
+    print("\n", merged["path"][1], "\n")
