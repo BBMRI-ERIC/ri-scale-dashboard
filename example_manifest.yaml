@@ -9,9 +9,10 @@ sources:
     type: discovery
     path: "./data/"
     params:
-      data_type: "whole_slide_image"
+      data_type: "wsi"
       include: "*.svs"
       recursive: false
+      column_name: "path"
       id_pattern: "^(?P<slide_id>.+?)(?=\\.svs$)" 
 
   - source_name: source2

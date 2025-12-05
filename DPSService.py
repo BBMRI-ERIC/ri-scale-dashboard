@@ -6,15 +6,13 @@ USAGE EXAMPLE:
 
 import argparse
 import os
-import queue
-import sys
 import logging
 import yaml
 from DPSPipeline import DPSPipeline
+import dpsdataset.Loaders as Loaders
 from dpsstep.ExampleDPSStep import ExampleDPSStep
 from dpsstep.JoinStep import JoinStep
-import pandas as pd
-from dpsdataset.Source import DataSourceStrategy, FileDiscoveryStrategy, CSVFileStrategy, Source
+from dpsdataset.Source import FileDiscoveryStrategy, CSVFileStrategy, Source
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +69,7 @@ class DataPreparationForExploitationService:
         right_source = self.sources[right_source_name]
         output_source = Source(
             source_name=output_source_name,
-            type=None  # Output source will be populated after join
+            data_source_strategy=None  # Output source will be populated after join
         )
 
         self.pipeline.add_step(JoinStep(
@@ -100,7 +98,7 @@ class DataPreparationForExploitationService:
         input_source = self.sources[input_source_name]
         output_source = Source(
             source_name=output_source_name,
-            type=None  # Output source will be populated after step execution
+            data_source_strategy=None  # Output source will be populated after step execution
         )
 
         example_step = ExampleDPSStep(input_source=input_source, output_source=output_source)
@@ -135,7 +133,7 @@ class DataPreparationForExploitationService:
                     case 'csv_file':
                         csv_source = Source(
                             source_name=defined_source.get('source_name', 'csv_source'),
-                            type=CSVFileStrategy(
+                            data_source_strategy=CSVFileStrategy(
                                 path=defined_source.get('path', ''),
                                 delimiter=defined_source.get('params', {}).get('delimiter', ','),
                                 header=defined_source.get('params', {}).get('header', True)
@@ -144,14 +142,17 @@ class DataPreparationForExploitationService:
                         self.sources[csv_source.source_name] = csv_source                   
                         
                     case 'discovery':
+                        loader = Loaders.getLoader(defined_source.get('params', {}).get('type', ''))
+                        
                         discovery_source = Source(
                             source_name=defined_source.get('source_name', 'discovery_source'),
-                            type=FileDiscoveryStrategy(
+                            data_source_strategy=FileDiscoveryStrategy(
                                 path=defined_source.get('path', ''),
                                 include=defined_source.get('params', {}).get('include', '*.svs'),
                                 recursive=defined_source.get('params', {}).get('recursive', False),
                                 id_pattern=defined_source.get('params', {}).get('id_pattern', '^(?P<slide_id>[^.]+)'),
-                                data_type=defined_source.get('params', {}).get('data_type', 'image')
+                                loader=defined_source.get('params', {}).get('loader', loader),
+                                column_name=defined_source.get('params', {}).get('column_name', 'path')
                             )
                         )
                         self.sources[discovery_source.source_name] = discovery_source

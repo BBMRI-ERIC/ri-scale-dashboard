@@ -35,8 +35,8 @@ class JoinStep(DPSStep):
         
         logger.info("Joining between %s and %s", self.left_source.source_name, self.right_source.source_name)
         try:
-            left_df = self.left_source.data
-            right_df = self.right_source.data
+            left_df = self.left_source.get_data()
+            right_df = self.right_source.get_data()
             joined_df = left_df.merge(right_df, how=self.join_type, left_on=self.left_key, right_on=self.right_key)
             self.output_source.data = joined_df
             logger.info(f"Join of {self.left_source.source_name} and {self.right_source.source_name} completed.")
