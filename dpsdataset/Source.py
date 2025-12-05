@@ -6,6 +6,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 from traitlets import Type
+
+from . import Loaders
 from .LazyDataframe import LazyDataFrame
 
 logger = logging.getLogger(__name__)
