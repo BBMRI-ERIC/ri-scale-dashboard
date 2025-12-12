@@ -9,7 +9,7 @@ sources:
     type: discovery
     path: "./data/"
     params:
-      data_type: "wsi"
+      # data_type: "wsi" # Set datatype to load data automatically on access
       include: "*.svs"
       recursive: false
       column_name: "path"
@@ -24,7 +24,15 @@ sources:
       header: true
 
 job_steps:
-  - step_name: join
+  - step_name: convert to dicom              # basic command call example
+    enabled: true
+    params:
+      input_source_name: source1
+      output_source_name: source1
+      input_column_name: path
+      output_column_name: dicom_path
+      command: "TODO -i {input} -o {output}"
+  - step_name: join                          # data merge example
     enabled: true
     params:
       left_source_name: source1
@@ -34,8 +42,3 @@ job_steps:
       right_key: slide_id
       join_type: inner
       missing_policy: drop
-  - step_name: ExampleDPSStep
-    enabled: true
-    params:
-      input_source_name: source1_source2_joined
-      output_source_name: processed_output

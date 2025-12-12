@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 from traitlets import Type
 
-#from Loaders import getLoader
+from .Loaders import getLoader
 from .LazyDataframe import LazyDataFrame
 
 logger = logging.getLogger(__name__)
@@ -132,7 +132,7 @@ class Source:
 
 if __name__ == "__main__":
     # Example usage
-    os.chdir("RIScale")
+    #os.chdir("RIScale")
     loader = getLoader("wsi")
     
     discovery = FileDiscoveryStrategy(path="./data/", include="*.svs", recursive=False, id_pattern=r"^(?P<slide_id>.+?)(?=\.svs$)", loader=loader)

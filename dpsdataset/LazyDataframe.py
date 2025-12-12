@@ -117,7 +117,6 @@ class LazyDataFrame():
             for name, loader in right_loaders.items():
                 if name in merged_field_loaders:
                     sx, sy = suffixes
-                    # move existing loader to name + sx, and add right loader as name + sy
                     merged_field_loaders[f"{name}{sx}"] = merged_field_loaders.pop(name)
                     merged_field_loaders[f"{name}{sy}"] = loader
                 else:

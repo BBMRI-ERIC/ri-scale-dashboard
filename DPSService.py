@@ -9,6 +9,7 @@ import os
 import logging
 import yaml
 from DPSPipeline import DPSPipeline
+from dpsstep.customCommandStep import CustomCommandStep
 import dpsdataset.Loaders as Loaders
 from dpsstep.ExampleDPSStep import ExampleDPSStep
 from dpsstep.JoinStep import JoinStep
@@ -82,7 +83,6 @@ class DataPreparationForExploitationService:
             missing_policy=missing_policy
         ))
 
-        # register intermediate output source
         self.sources[output_source_name] = output_source
         return True
 
@@ -103,6 +103,46 @@ class DataPreparationForExploitationService:
 
         example_step = ExampleDPSStep(input_source=input_source, output_source=output_source)
         self.pipeline.add_step(example_step)
+
+        # register intermediate output source
+        self.sources[output_source_name] = output_source
+        return True
+    
+    def __handle_custom__(self, params) -> bool:
+        if params is None or params == {}:
+            return False
+        
+        command = params.get('command', None)
+        
+        if command is None:
+            return False
+        
+        input_source_name = params.get('input_source_name', '')
+        output_source_name = params.get('output_source_name', 'custom_command_output')
+        
+        if input_source_name not in self.sources:
+            logger.error("Input source for custom command step not found: %s", input_source_name)
+            return False
+        
+        input_column_name = params.get('input_column_name', None)
+        output_column_name = params.get('output_column_name', None)
+        
+        if input_column_name == None or output_column_name == None:
+            logger.error("Input or output column name for custom command step not specified")
+            return False
+        
+        output_source = Source(
+            source_name=output_source_name,
+            data_source_strategy=None  # Output source will be populated after step execution
+        )
+        
+        self.pipeline.add_step(CustomCommandStep(
+            input_source=self.sources[input_source_name], 
+            output_source=output_source, 
+            command=command, 
+            input_column=input_column_name, 
+            output_column=output_column_name
+            ))
 
         # register intermediate output source
         self.sources[output_source_name] = output_source
@@ -176,19 +216,24 @@ class DataPreparationForExploitationService:
                         if enabled:
                             if not self.__handle_join__(params):
                                 continue
-                            logger.info("Added join step: %s", step_name)
+                            logger.info("Added join step: \"%s\"", step_name)
                         else:
-                            logger.info("Skipping disabled step: %s", step_name)
+                            logger.info("Skipping disabled step: \"%s\"", step_name)
                     case 'ExampleDPSStep':
                         if enabled:
                             if not self.__handle_example__(params):
                                 continue
-                            logger.info("Added example DPS step: %s", step_name)
+                            logger.info("Added example DPS step: \"%s\"", step_name)
                         else:
-                            logger.info("Skipping disabled step: %s", step_name)
+                            logger.info("Skipping disabled step: \"%s\"", step_name)
                     case _:
-                        logger.warning("Unknown DPS step: %s", step_name)
-
+                        if enabled:
+                            if not self.__handle_custom__(params):
+                                logger.error("Invalid step: \"%s\"", step_name)
+                                continue
+                            logger.warning("[POTENTIALLY INSECURE] Added custom step: \"%s\" (%s)", step_name, params.get('command', 'no command'))
+                        else:
+                            logger.info("Skipping disabled step: \"%s\"", step_name)
 
     def run(self) -> bool:
         """
