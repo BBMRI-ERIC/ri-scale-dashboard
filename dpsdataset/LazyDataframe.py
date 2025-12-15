@@ -17,7 +17,7 @@ class LazyRow:
                 value = self._row[key]
             else:
                 value = loader(self._row)
-                
+            
             self._cache[key] = value
             
             return value

@@ -17,7 +17,7 @@ def getLoader(type):
         "csv" - CSV file loader
     """
     
-    return __loader_register.get(type, __example_loader)
+    return __loader_register.get(type, None)
 
 def register(type):
     """
@@ -33,10 +33,10 @@ def register(type):
 """
 Add Loaders and register them here:
 """
-@register("example")
-def __example_loader(path):
-    __logger.error(f"Using example Loader for path: {path}")
-    return f"<LoadedObject: {path}>"
+@register("default")
+def __default_loader(path):
+    __logger.debug(f"No loader for path: {path}")
+    return path
 
 @register("wsi")
 def __wsi_loader(path) -> Generator[Image, None, None]:

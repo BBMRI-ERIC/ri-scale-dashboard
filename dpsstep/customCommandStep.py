@@ -1,3 +1,4 @@
+import json
 import subprocess
 from dpsdataset import Source
 from dpsstep.DPSStep import DPSStep
@@ -34,7 +35,13 @@ class CustomCommandStep(DPSStep):
                 pass
 
         self.command = final_command
-        
-        subprocess.run(self.command, shell=True, check=True)
-
+        try:
+            proc = subprocess.run(self.command, shell=True, check=True, text=True, capture_output=True)
+            meta = json.loads(proc.stdout.strip())
+            for key, value in meta.items():
+                logger.info(f"Command output - {key}: {value}")
+            
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Command failed with error: {e}")
+            return False
         return True
