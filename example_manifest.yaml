@@ -31,9 +31,10 @@ job_steps:
       output_source_name: source1
       input_column_name: path
       output_column_name: dicom_path
-      command: "dcmconv -i {input} -o {output}"
-      # command: "dcmconv -i {input_path} -o {output_path}"
-      # command: "dcmconv -i {input_file} -o {output_file}"
+      # input_path: "./data/{slide_id}.svs"
+      # output_path: "./data/{slide_id}.dcm"
+      # command: "dcmconv -i {input_folder} -o {output_folder}"
+      command: "dcmconv -i {input_file} -o {output_file}"
   - step_name: join                          # data merge example
     enabled: true
     params:

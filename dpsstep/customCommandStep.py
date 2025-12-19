@@ -9,7 +9,7 @@ import os
 logger = logging.getLogger(__name__)
 
 class CustomCommandStep(DPSStep):
-    def __init__(self, input_source:Source, output_source:Source, input_column, output_column, command: str):
+    def __init__(self, input_source:Source, output_source:Source, command:str, input_column:str = None, output_column:str = None):
         super().__init__(command)
         self.input_source = input_source
         self.output_source = output_source
@@ -25,14 +25,28 @@ class CustomCommandStep(DPSStep):
         for _, row in self.input_source.get_data().iterrows():
             try:
                 input_file = row[self.input_column]
-    
-                output_folder = os.path.dirname(str(input_file)) or '.'
+                input_folder = os.path.dirname(str(input_file)) or '.'
                 
-                final_command = self.command.format(input=input_file, output=output_folder)
+                output_file = input_file + "_output"
+                output_folder = os.path.dirname(str(output_file)) or '.'
+                
+                if '{input_file}' in self.command and '{output_folder}' in self.command:
+                    final_command = self.command.format(input_file=input_file, output_folder=output_folder)
+                    logger.debug(f"Command of type \"programm -i input_file -o output_folder\"")
+                elif '{input_file}' in self.command and '{output_file}' in self.command:
+                    final_command = self.command.format(input_file=input_file, output_file=output_file)
+                    logger.debug(f"Command of type \"programm -i input_file -o output_file\"")
+                elif '{input_folder}' in self.command and '{output_folder}' in self.command:
+                    final_command = self.command.format(input_folder=input_folder, output_folder=output_folder)
+                    logger.debug(f"Command of type \"programm -i input_folder -o output_folder\"")
+                    break
+                else:
+                    final_command = self.command
+                    logger.debug(f"Command without specific input/output placeholders")
+                    break  # Only need to format once for the command execution
             except Exception:
                 logger.error("Error formatting command with input and output columns")
                 return False
-                pass
 
         self.command = final_command
         try:

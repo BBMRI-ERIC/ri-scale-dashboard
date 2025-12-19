@@ -26,6 +26,15 @@ class LazyRow:
     
     def __repr__(self):
         return self._row.__repr__()
+    
+    def to_dict(self):
+        result = {}
+        for col in self._row.index:
+            result[col] = self[col]
+        return result
+    
+    def __len__(self):
+        return len(self._row)
 
 
 class LazySeries:
@@ -46,6 +55,19 @@ class LazySeries:
         
     def __repr__(self):
         return self._series.__repr__()
+    
+    def to_list(self):
+        result = []
+        for i in range(len(self._series)):
+            result.append(self[i])
+        return result
+    
+    def __len__(self):
+        return len(self._series)
+    
+    def __iter__(self):
+        for i in range(len(self._series)):
+            yield self[i]
 
 class LazyDataFrame():
     """
@@ -58,6 +80,7 @@ class LazyDataFrame():
     def __init__(self, data=None, index=None, columns=None, dtype=None, copy=False, field_loaders: dict[str, callable] = {}):
         self._dataframe = pd.DataFrame(data, index=index, columns=columns, dtype=dtype, copy=copy)
         self._field_loaders = field_loaders
+        self.columns = self._dataframe.columns
         
     def __getitem__(self, key):
         result = self._dataframe.__getitem__(key)
@@ -87,6 +110,16 @@ class LazyDataFrame():
     
     def __len__(self):
         return len(self._dataframe)
+    
+    def to_pandas(self):
+        return self._dataframe.copy()
+    
+    def to_dict(self, orient='dict'):
+        result = {}
+        for col in self._dataframe.columns:
+            series = self[col]
+            result[col] = series.to_list()
+        return result
     
     def merge(self, right, how="inner", on=None, left_on=None, right_on=None, left_index=False, right_index=False, sort=False, suffixes=('_x', '_y'), copy=True, indicator=False, validate=None):
         """
