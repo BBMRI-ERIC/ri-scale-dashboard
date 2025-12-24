@@ -3,39 +3,51 @@ manifest_id: "id2025-11-13"
 created_by: "user@example.org"
 created_at: "2025-11-13T10:00:00Z"
 
-
-sources:
-  - source_name: source1
-    type: discovery
-    path: "./data/"
-    params:
-      # data_type: "wsi" # Set datatype to load data automatically on access
-      include: "*.svs"
-      recursive: false
-      column_name: "path"
-      id_pattern: "^(?P<slide_id>.+?)(?=\\.svs$)" 
-
-  - source_name: source2
-    type: csv_file
-    path: "./data/labels.csv"
-    params:
-      key_field: "slide_id"
-      delimiter: ","
-      header: true
-
 job_steps:
-  - step_name: convert to dicom              # basic command call example
+  - step_name: load source1 data          # data loading example
+    type: load
     enabled: true
     params:
-      input_source_name: source1
       output_source_name: source1
-      input_column_name: path
-      output_column_name: dicom_path
-      # input_path: "./data/{slide_id}.svs"
-      # output_path: "./data/{slide_id}.dcm"
-      # command: "dcmconv -i {input_folder} -o {output_folder}"
-      command: "dcmconv -i {input_file} -o {output_file}"
-  - step_name: join                          # data merge example
+      mode: "discovery"
+      path: "./data/"
+      include: "*.svs"
+      recursive: false
+      columns:
+        column_name: "path"
+        filename_to_columnname: "^(?P<slide_id>.+?)(?=\\.svs$)"
+
+  - step_name: load source2 data          # data loading example
+    type: load
+    enabled: true
+    params:
+      output_source_name: source2
+      mode: "csv_file"
+      path: "./data/labels.csv"
+      columns:
+        header: true
+        delimiter: ","
+
+  # - step_name: convert to dicom              # basic command call example
+  #   type: custom_command
+  #   enabled: true
+  #   params:
+  #     input_source_name: source1
+  #     command: "dcmconv -i {path} -o ./results/{slide_id}_output.dcm"
+
+  # - step_name: load dicom output
+  #   type: read
+  #   enabled: true
+  #   params:
+  #     mode: discovery
+  #     output_source_name: source3_dicom
+  #     include: "*.dcm"
+  #     recursive: false
+  #     column_name: "dicom_path"
+  #     filename_to_columnname: "^(?P<slide_id>.+?)(?=\\.dcm$)"
+
+  - step_name: join results                        # data merge example
+    type: join
     enabled: true
     params:
       left_source_name: source1

@@ -147,7 +147,71 @@ class DataPreparationForExploitationService:
         # register intermediate output source
         self.sources[output_source_name] = output_source
         return True
+    
+    def __handle_load__(self, params) -> bool:
+        error = False
+        source_name = params.get('output_source_name', None)
+        mode = params.get('mode', None)
+        path = params.get('path', None)
+        include = params.get('include', None)
+        recursive = params.get('recursive', False)
+        column_info = params.get('columns', None)
+        file_type = params.get('file_type', None)
+        
+        if source_name is None:
+            logger.error("Output source name not set")
+            error = True
+        if mode is None:
+            logger.error("mode (file/discovery) not set")
+            error = True
+        if path is None:
+            logger.error("path not set")
+            error = True
+        if column_info is None and mode == "discovery":
+            logger.error("No further information about column structure provided")
+            error = True
+        else:
+            if mode == "discovery":
+                path_column_name = column_info.get('column_name', 'path')
+                regex_filename_to_columnnames = column_info.get('filename_to_columnname', None)
+                if regex_filename_to_columnnames is None:
+                    logger.error("No regex given to extract key name from file name")
+                    error = True
+            elif mode == "csv_file" and column_info is not None:
+                header = column_info.get('header', False)
+                delimiter = column_info.get('delimiter', ',')
 
+        if error:
+            return False
+
+        loader = Loaders.getLoader(file_type)
+        
+        if mode == "discovery":
+            source = Source(
+                source_name=source_name,
+                data_source_strategy=FileDiscoveryStrategy(
+                    path=path,
+                    include=include,
+                    recursive=recursive,
+                    id_pattern=regex_filename_to_columnnames,
+                    loader=loader,
+                    column_name=path_column_name
+                )
+            )
+            self.sources[source.source_name] = source
+        elif mode == "csv_file":
+            source = Source(
+                source_name=source_name,
+                data_source_strategy=CSVFileStrategy(
+                    path=path,
+                    delimiter=delimiter,
+                    header=header
+                )
+            )
+            self.sources[source.source_name] = source 
+        
+        return True
+        
     def __parse_manifest__(self):
         """
         Parse the manifest YAML file to initialize sources and steps.
@@ -162,45 +226,45 @@ class DataPreparationForExploitationService:
             logger.info("Manifest ID: %s, created by: %s at %s",
                         manifest_id, created_by, created_at)
             
-            defined_sources = manifest.get('sources', [])
+            # defined_sources = manifest.get('sources', [])
             self.sources: dict[str, Source] = {}
             
         # ------------------------------------------------------------------------------------
         # Parse and add primary data sources used by the pipeline
         # ------------------------------------------------------------------------------------
-            for defined_source in defined_sources:
-                match defined_source.get('type', ''):
-                    case 'csv_file':
-                        csv_source = Source(
-                            source_name=defined_source.get('source_name', 'csv_source'),
-                            data_source_strategy=CSVFileStrategy(
-                                path=defined_source.get('path', ''),
-                                delimiter=defined_source.get('params', {}).get('delimiter', ','),
-                                header=defined_source.get('params', {}).get('header', True)
-                            )
-                        )
-                        self.sources[csv_source.source_name] = csv_source                   
+            # for defined_source in defined_sources:
+            #     match defined_source.get('type', ''):
+            #         case 'csv_file':
+            #             csv_source = Source(
+            #                 source_name=defined_source.get('source_name', 'csv_source'),
+            #                 data_source_strategy=CSVFileStrategy(
+            #                     path=defined_source.get('path', ''),
+            #                     delimiter=defined_source.get('params', {}).get('delimiter', ','),
+            #                     header=defined_source.get('params', {}).get('header', True)
+            #                 )
+            #             )
+            #             self.sources[csv_source.source_name] = csv_source                   
                         
-                    case 'discovery':
-                        loader = Loaders.getLoader(defined_source.get('params', {}).get('type', ''))
+            #         case 'discovery':
+            #             loader = Loaders.getLoader(defined_source.get('params', {}).get('type', ''))
                         
-                        discovery_source = Source(
-                            source_name=defined_source.get('source_name', 'discovery_source'),
-                            data_source_strategy=FileDiscoveryStrategy(
-                                path=defined_source.get('path', ''),
-                                include=defined_source.get('params', {}).get('include', '*.svs'),
-                                recursive=defined_source.get('params', {}).get('recursive', False),
-                                id_pattern=defined_source.get('params', {}).get('id_pattern', '^(?P<slide_id>[^.]+)'),
-                                loader=defined_source.get('params', {}).get('loader', loader),
-                                column_name=defined_source.get('params', {}).get('column_name', 'path')
-                            )
-                        )
-                        self.sources[discovery_source.source_name] = discovery_source
+            #             discovery_source = Source(
+            #                 source_name=defined_source.get('source_name', 'discovery_source'),
+            #                 data_source_strategy=FileDiscoveryStrategy(
+            #                     path=defined_source.get('path', ''),
+            #                     include=defined_source.get('params', {}).get('include', '*.svs'),
+            #                     recursive=defined_source.get('params', {}).get('recursive', False),
+            #                     id_pattern=defined_source.get('params', {}).get('id_pattern', '^(?P<slide_id>[^.]+)'),
+            #                     loader=defined_source.get('params', {}).get('loader', loader),
+            #                     column_name=defined_source.get('params', {}).get('column_name', 'path')
+            #                 )
+            #             )
+            #             self.sources[discovery_source.source_name] = discovery_source
                         
-                    case 'step_output':
-                        raise NotImplementedError("Source type 'step_output' is not implemented yet.")
-                    case _:
-                        logger.error("Unknown source type: %s", defined_source.get('type', ''))
+            #         case 'step_output':
+            #             raise NotImplementedError("Source type 'step_output' is not implemented yet.")
+            #         case _:
+            #             logger.error("Unknown source type: %s", defined_source.get('type', ''))
         
         # -----------------------------------------------------------------------------------------
         # Parse and add DPS steps and their intermediate data source results to the pipeline
@@ -208,32 +272,33 @@ class DataPreparationForExploitationService:
             steps = manifest.get('dps_steps', manifest.get('job_steps', []))
             for step in steps:
                 step_name = step.get('step_name', '')
+                step_type = step.get('type', '')
                 enabled = step.get('enabled', False)
                 params = step.get('params', {})
+                
+                if not enabled:
+                    logger.info("Skipping disabled step: \"%s\"", step_name)
+                    continue
 
-                match step_name:
+                match step_type:
+                    case 'load':
+                        if not self.__handle_load__(params):
+                            continue
+                        
                     case 'join':
-                        if enabled:
-                            if not self.__handle_join__(params):
-                                continue
-                            logger.info("Added join step: \"%s\"", step_name)
-                        else:
-                            logger.info("Skipping disabled step: \"%s\"", step_name)
+                        if not self.__handle_join__(params):
+                            continue
+                        logger.info("Added join step: \"%s\"", step_name)
                     case 'ExampleDPSStep':
-                        if enabled:
-                            if not self.__handle_example__(params):
-                                continue
-                            logger.info("Added example DPS step: \"%s\"", step_name)
-                        else:
-                            logger.info("Skipping disabled step: \"%s\"", step_name)
+                        if not self.__handle_example__(params):
+                            continue
+                        logger.info("Added example DPS step: \"%s\"", step_name)
+                    case 'custom_command':
+                        if not self.__handle_custom__(params):
+                            continue
+                        logger.warning("[POTENTIALLY INSECURE] Added custom step: \"%s\" (%s)", step_name, params.get('command', 'no command'))
                     case _:
-                        if enabled:
-                            if not self.__handle_custom__(params):
-                                logger.error("Invalid step: \"%s\"", step_name)
-                                continue
-                            logger.warning("[POTENTIALLY INSECURE] Added custom step: \"%s\" (%s)", step_name, params.get('command', 'no command'))
-                        else:
-                            logger.info("Skipping disabled step: \"%s\"", step_name)
+                        logger.error("Invalid step: \"%s\"", step_name)
 
     def run(self) -> bool:
         """
