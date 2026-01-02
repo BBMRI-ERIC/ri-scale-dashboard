@@ -6,6 +6,7 @@ class LazyRow:
         self._row = row
         self._field_loaders = field_loaders
         self._cache: dict[str, object] = {}
+        self.index = row.index
         
     def __getitem__(self, key: str):
         if key in self._cache:
@@ -13,16 +14,20 @@ class LazyRow:
         
         if key in self._field_loaders:
             loader = self._field_loaders[key]
+        else:
+            loader = None
+        
+        try:
             if loader == None:
                 value = self._row[key]
             else:
                 value = loader(self._row)
             
             self._cache[key] = value
-            
+                
             return value
-        
-        raise KeyError(f"Key {key} not found in LazyRow.")
+        except KeyError:
+            raise KeyError(f"Key {key} not found in LazyRow.")
     
     def __repr__(self):
         return self._row.__repr__()
@@ -35,6 +40,7 @@ class LazyRow:
     
     def __len__(self):
         return len(self._row)
+    
 
 
 class LazySeries:

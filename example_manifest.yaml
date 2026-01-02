@@ -28,12 +28,14 @@ job_steps:
         header: true
         delimiter: ","
 
-  # - step_name: convert to dicom              # basic command call example
-  #   type: custom_command
-  #   enabled: true
-  #   params:
-  #     input_source_name: source1
-  #     command: "dcmconv -i {path} -o ./results/{slide_id}_output.dcm"
+  - step_name: convert to dicom              # basic command call example
+    type: custom_command
+    enabled: true
+    params:
+      input_source_name: source1
+      execution_mode: "per_row"
+      command: "dcmconv -i {path} -o ./results/{slide_id}_output.dcm"
+      #command: "dcmconv -i test -o ./results/test_output.dcm"
 
   # - step_name: load dicom output
   #   type: read

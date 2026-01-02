@@ -14,6 +14,7 @@ import dpsdataset.Loaders as Loaders
 from dpsstep.ExampleDPSStep import ExampleDPSStep
 from dpsstep.JoinStep import JoinStep
 from dpsdataset.Source import FileDiscoveryStrategy, CSVFileStrategy, Source
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -118,34 +119,22 @@ class DataPreparationForExploitationService:
             return False
         
         input_source_name = params.get('input_source_name', '')
-        output_source_name = params.get('output_source_name', 'custom_command_output')
+        #output_source_name = params.get('output_source_name', 'custom_command_output')
         
-        if input_source_name not in self.sources:
-            logger.error("Input source for custom command step not found: %s", input_source_name)
+        execution_mode = params.get('execution_mode', 'per_row')
+        
+        if execution_mode == "per_row" and input_source_name not in self.sources:
+            logger.error("Input source for custom command step with per row execution mode not found: %s", input_source_name)
             return False
         
-        input_column_name = params.get('input_column_name', None)
-        output_column_name = params.get('output_column_name', None)
-        
-        if input_column_name == None or output_column_name == None:
-            logger.error("Input or output column name for custom command step not specified")
-            return False
-        
-        output_source = Source(
-            source_name=output_source_name,
-            data_source_strategy=None  # Output source will be populated after step execution
-        )
+        fields = re.findall(r'\{(\w+)\}', command)
         
         self.pipeline.add_step(CustomCommandStep(
             input_source=self.sources[input_source_name], 
-            output_source=output_source, 
-            command=command, 
-            input_column=input_column_name, 
-            output_column=output_column_name
+            command=command, fields=fields,
+            execution_mode=execution_mode
             ))
-
-        # register intermediate output source
-        self.sources[output_source_name] = output_source
+        
         return True
     
     def __handle_load__(self, params) -> bool:
@@ -209,7 +198,7 @@ class DataPreparationForExploitationService:
                 )
             )
             self.sources[source.source_name] = source 
-        
+
         return True
         
     def __parse_manifest__(self):
@@ -228,43 +217,7 @@ class DataPreparationForExploitationService:
             
             # defined_sources = manifest.get('sources', [])
             self.sources: dict[str, Source] = {}
-            
-        # ------------------------------------------------------------------------------------
-        # Parse and add primary data sources used by the pipeline
-        # ------------------------------------------------------------------------------------
-            # for defined_source in defined_sources:
-            #     match defined_source.get('type', ''):
-            #         case 'csv_file':
-            #             csv_source = Source(
-            #                 source_name=defined_source.get('source_name', 'csv_source'),
-            #                 data_source_strategy=CSVFileStrategy(
-            #                     path=defined_source.get('path', ''),
-            #                     delimiter=defined_source.get('params', {}).get('delimiter', ','),
-            #                     header=defined_source.get('params', {}).get('header', True)
-            #                 )
-            #             )
-            #             self.sources[csv_source.source_name] = csv_source                   
-                        
-            #         case 'discovery':
-            #             loader = Loaders.getLoader(defined_source.get('params', {}).get('type', ''))
-                        
-            #             discovery_source = Source(
-            #                 source_name=defined_source.get('source_name', 'discovery_source'),
-            #                 data_source_strategy=FileDiscoveryStrategy(
-            #                     path=defined_source.get('path', ''),
-            #                     include=defined_source.get('params', {}).get('include', '*.svs'),
-            #                     recursive=defined_source.get('params', {}).get('recursive', False),
-            #                     id_pattern=defined_source.get('params', {}).get('id_pattern', '^(?P<slide_id>[^.]+)'),
-            #                     loader=defined_source.get('params', {}).get('loader', loader),
-            #                     column_name=defined_source.get('params', {}).get('column_name', 'path')
-            #                 )
-            #             )
-            #             self.sources[discovery_source.source_name] = discovery_source
-                        
-            #         case 'step_output':
-            #             raise NotImplementedError("Source type 'step_output' is not implemented yet.")
-            #         case _:
-            #             logger.error("Unknown source type: %s", defined_source.get('type', ''))
+        
         
         # -----------------------------------------------------------------------------------------
         # Parse and add DPS steps and their intermediate data source results to the pipeline
