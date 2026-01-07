@@ -72,7 +72,7 @@ class CustomCommandStep(DPSStep):
 
             proc = self.__run_command__(final_command)
             if proc is None:
-                logger.error("Command execution failed for row with values: " + str(command_values))
+                logger.error("Command execution failed for command with values: " + str(command_values))
                 #return False # Continue executing other rows even if one fails
             
         return True

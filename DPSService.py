@@ -66,7 +66,7 @@ class DataPreparationForExploitationService:
         if right_source_name not in self.sources:
             logger.error("Right source for join not found: %s", right_source_name)
             return False
-
+        
         left_source = self.sources[left_source_name]
         right_source = self.sources[right_source_name]
         output_source = Source(
@@ -215,8 +215,17 @@ class DataPreparationForExploitationService:
             logger.info("Manifest ID: %s, created by: %s at %s",
                         manifest_id, created_by, created_at)
             
+            simulated = manifest.get('simulated', True)
+            if simulated:
+                logger.info("Running in SIMULATED mode.")
+                self.pipeline.simulated = True
+            else:
+                logger.info("Running in PRODUCTION mode.")
+                self.pipeline.simulated = False
+            
             # defined_sources = manifest.get('sources', [])
             self.sources: dict[str, Source] = {}
+
         
         
         # -----------------------------------------------------------------------------------------
@@ -237,7 +246,7 @@ class DataPreparationForExploitationService:
                     case 'load':
                         if not self.__handle_load__(params):
                             continue
-                        
+                        logger.info("Added load step: \"%s\"", step_name)
                     case 'join':
                         if not self.__handle_join__(params):
                             continue
@@ -249,9 +258,11 @@ class DataPreparationForExploitationService:
                     case 'custom_command':
                         if not self.__handle_custom__(params):
                             continue
-                        logger.warning("[POTENTIALLY INSECURE] Added custom step: \"%s\" (%s)", step_name, params.get('command', 'no command'))
+                        #logger.warning("[POTENTIALLY INSECURE] Added custom step: \"%s\" (%s)", step_name, params.get('command', 'no command'))
+                        logger.info("Added custom command step: \"%s\" (%s)", step_name, params.get('command', 'no command'))
                     case _:
                         logger.error("Invalid step: \"%s\"", step_name)
+
 
     def run(self) -> bool:
         """

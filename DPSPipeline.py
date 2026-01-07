@@ -11,12 +11,13 @@ class DPSPipeline:
     Holds a sequence of data preparation steps to be executed.
     """
     
-    def __init__(self, steps: list[DPSStep] | None = None):
+    def __init__(self, steps: list[DPSStep] | None = None, simulated: bool = True):
         if steps:
             self.steps: list.List[DPSStep] = steps
         else:
             self.steps: list.List[DPSStep] = []
-
+            
+        self.simulated = simulated
 
     def add_step(self, step: DPSStep):
         self.steps.append(step)
@@ -49,9 +50,14 @@ class DPSPipeline:
         if not self.steps:
             logger.warning("No steps in the pipeline to run.")
             return False
-        step = self.steps.pop(0)
-        logger.info("Running next step: %s", step.name)
-        return step.execute()
+        if not self.simulated:
+            step = self.steps.pop(0)
+            logger.info("Running next step: %s", step.name)
+            return step.execute()
+        else:
+            step = self.steps.pop(0)
+            logger.info("[Simulated mode] Would run step: %s", step.name)
+            return True
     
     
     def has_steps_left(self) -> bool:
