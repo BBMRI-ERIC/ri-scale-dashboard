@@ -90,26 +90,3 @@ The dashboard acts as the **operational control plane** for RI-SCALE biomedical 
 │   └── diagrams/        # Architecture & workflow diagrams
 ├── README.md
 └── LICENSE
-Note: The structure may evolve as the dashboard prototype matures.
-🔐 Data Protection & Ethics
-This repository does not contain any sensitive data.
-All real data access within UC7 and UC8 is governed by:
-
-BBMRI-ERIC Negotiator workflows
-Ethics approvals and DPIA documentation
-Contractual data access conditions
-Secure Processing Environments (SPEs)
-The dashboard only visualises metadata, status information, and aggregated metrics.
-📄 Reference Material
-The conceptual and architectural basis for this repository is documented in:
-RI-SCALE Grant Proposal (HORIZON-INFRA-2024-TECH-01)
-BBMRI-ERIC RI-SCALE Workflow & Dashboard Presentation
-These documents provide the authoritative description of:
-Data Exploitation Platforms (DEPs)
-Scientific use cases
-Workflow orchestration
-Governance and trust model
-🤝 Contributors
-BBMRI-ERIC Common Service IT
-RI-SCALE project partners
-Scientific use case teams (UC7 & UC8)
