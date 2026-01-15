@@ -6,20 +6,21 @@ created_at: "2025-11-13T10:00:00Z"
 simulated: true
 
 job_steps:
-  - step_name: load source1 data          # data loading example
+  - step_name: load wsi data          # data loading example
     type: load
     enabled: true
     params:
       output_source_name: source1
       mode: "discovery"
-      path: "./data/"
+      path: "./data/wsi"
       include: "*.svs"
       recursive: false
+      directory_mode: false
       columns:
-        column_name: "path"
+        column_name: "wsi_path"
         filename_to_columnname: "^(?P<slide_id>.+?)(?=\\.svs$)"
 
-  - step_name: load source2 data          # data loading example
+  - step_name: load labels csv data          # data loading example
     type: load
     enabled: true
     params:
@@ -30,25 +31,41 @@ job_steps:
         header: true
         delimiter: ","
 
-  - step_name: convert to dicom              # basic command call example
+  - step_name: delete existing dicom output folder
+    type: custom_command
+    enabled: true
+    params:
+      execution_mode: "once"
+      command: "rm -rf ./data/dicom_dicomizer" 
+
+  - step_name: create dicom output folder
+    type: custom_command
+    enabled: true
+    params:
+      execution_mode: "once"
+      command: "mkdir -p ./data/dicom_dicomizer"
+
+  - step_name: convert wsi to dicom              # basic command call example
     type: custom_command
     enabled: true
     params:
       input_source_name: source1
       execution_mode: "per_row"
-      command: "dcmconv -i {path} -o ./results/{slide_id}_output.dcm"
-      #command: "dcmconv -i test -o ./results/test_output.dcm"
+      command: "wsidicomizer -i {wsi_path} -o ./data/dicom_dicomizer/{slide_id} --source opentile --format jpeg --quality 100"
 
-  # - step_name: load dicom output
-  #   type: read
-  #   enabled: true
-  #   params:
-  #     mode: discovery
-  #     output_source_name: source3_dicom
-  #     include: "*.dcm"
-  #     recursive: false
-  #     column_name: "dicom_path"
-  #     filename_to_columnname: "^(?P<slide_id>.+?)(?=\\.dcm$)"
+  - step_name: load dicom output
+    type: load
+    enabled: true
+    params:
+      output_source_name: source3_dicom
+      mode: discovery
+      path: "./data/dicom_dicomizer"
+      include: "*"
+      recursive: false
+      directory_mode: true
+      columns:
+        column_name: "dicom_path"
+        filename_to_columnname: "^(?P<slide_id>.+)$"
 
   - step_name: join results                        # data merge example
     type: join
@@ -57,6 +74,18 @@ job_steps:
       left_source_name: source1
       right_source_name: source2
       output_source_name: source1_source2_joined
+      left_key: slide_id
+      right_key: slide_id
+      join_type: inner
+      missing_policy: drop
+
+  - step_name: join results dicom
+    type: join
+    enabled: true
+    params:
+      left_source_name: source1_source2_joined
+      right_source_name: source3_dicom
+      output_source_name: final_output
       left_key: slide_id
       right_key: slide_id
       join_type: inner

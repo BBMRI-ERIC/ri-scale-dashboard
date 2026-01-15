@@ -81,7 +81,8 @@ class DataPreparationForExploitationService:
             left_key=left_key,
             right_key=right_key,
             join_type=join_type,
-            missing_policy=missing_policy
+            missing_policy=missing_policy,
+            simulated=self.pipeline.simulated
         ))
 
         self.sources[output_source_name] = output_source
@@ -102,7 +103,7 @@ class DataPreparationForExploitationService:
             data_source_strategy=None  # Output source will be populated after step execution
         )
 
-        example_step = ExampleDPSStep(input_source=input_source, output_source=output_source)
+        example_step = ExampleDPSStep(input_source=input_source, output_source=output_source, simulated=self.pipeline.simulated)
         self.pipeline.add_step(example_step)
 
         # register intermediate output source
@@ -118,21 +119,27 @@ class DataPreparationForExploitationService:
         if command is None:
             return False
         
-        input_source_name = params.get('input_source_name', '')
+        input_source_name = params.get('input_source_name', None)
         #output_source_name = params.get('output_source_name', 'custom_command_output')
+        
+        input_source = self.sources.get(input_source_name, None)
         
         execution_mode = params.get('execution_mode', 'per_row')
         
-        if execution_mode == "per_row" and input_source_name not in self.sources:
-            logger.error("Input source for custom command step with per row execution mode not found: %s", input_source_name)
+        if execution_mode == "per_row" and input_source_name is None:
+            logger.error("Input source is needed with per-row execution mode.")
+            return False
+        elif execution_mode == "per_row" and input_source is None:
+            logger.error("Given input source not found: %s", input_source_name)
             return False
         
         fields = re.findall(r'\{(\w+)\}', command)
         
         self.pipeline.add_step(CustomCommandStep(
-            input_source=self.sources[input_source_name], 
+            input_source=input_source, 
             command=command, fields=fields,
-            execution_mode=execution_mode
+            execution_mode=execution_mode,
+            simulated=self.pipeline.simulated
             ))
         
         return True
@@ -146,6 +153,7 @@ class DataPreparationForExploitationService:
         recursive = params.get('recursive', False)
         column_info = params.get('columns', None)
         file_type = params.get('file_type', None)
+        directory_mode = params.get('directory_mode', False)
         
         if source_name is None:
             logger.error("Output source name not set")
@@ -184,7 +192,8 @@ class DataPreparationForExploitationService:
                     recursive=recursive,
                     id_pattern=regex_filename_to_columnnames,
                     loader=loader,
-                    column_name=path_column_name
+                    column_name=path_column_name,
+                    directory_mode=directory_mode
                 )
             )
             self.sources[source.source_name] = source
@@ -246,7 +255,7 @@ class DataPreparationForExploitationService:
                     case 'load':
                         if not self.__handle_load__(params):
                             continue
-                        logger.info("Added load step: \"%s\"", step_name)
+                        logger.info("Added Source loader: \"%s\"", step_name)
                     case 'join':
                         if not self.__handle_join__(params):
                             continue
@@ -277,7 +286,7 @@ class DataPreparationForExploitationService:
         while status:
             status = self.pipeline.run_next_step()
             
-            logger.info("Pipeline has %d steps left.", len(self.pipeline.steps))
+            logger.debug("Pipeline has %d steps left.", len(self.pipeline.steps))
         logger.info("DPS Pipeline execution completed.")
         return status
 

@@ -48,16 +48,12 @@ class DPSPipeline:
         Returns:
             bool: True if the step executed successfully, False otherwise."""
         if not self.steps:
-            logger.warning("No steps in the pipeline to run.")
+            logger.info("No steps in the pipeline to run.")
             return False
-        if not self.simulated:
-            step = self.steps.pop(0)
-            logger.info("Running next step: %s", step.name)
-            return step.execute()
-        else:
-            step = self.steps.pop(0)
-            logger.info("[Simulated mode] Would run step: %s", step.name)
-            return True
+        
+        step = self.steps.pop(0)
+        logger.info("Running next step: %s", step.name)
+        return step.execute()
     
     
     def has_steps_left(self) -> bool:
