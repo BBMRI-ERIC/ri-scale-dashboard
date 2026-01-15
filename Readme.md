@@ -1,15 +1,15 @@
 
 # RIScale - Data Preparation for Exploitation Service (DPS)
 
-## Overview
+# Overview
 
 The Data Preparation for Exploitation Service (DPS) is a user-invoked service that prepares datasets for downstream use. It translates heterogeneous data inputs into standardized formats suitable for algorithmic processing, while maintaining consistent metadata and directory structure conventions across the platform.
 
-## Manifest File
+# Manifest File
 
 The manifest file is a YAML configuration that defines the data preparation pipeline. It specifies data sources to load, processing steps to execute, and how to handle data transformations.
 
-### Running the DPS with a Manifest
+## Running the DPS with a Manifest
 
 ```bash
 python dps_service.py -m ./path/to/manifest.yaml -v
@@ -254,3 +254,168 @@ Sources are referenced by name and can be used as input to custom commands or jo
 3. **Use regex groups** in discovery patterns to extract meaningful metadata like IDs
 4. **Verify join keys** exist in both sources before performing joins
 5. **Document custom commands** with clear step names explaining their purpose
+
+---
+
+# Framework Architecture
+
+## Core Components
+
+The DPS is built on a modular, pipeline-based architecture with the following key components:
+
+### 1. **DPS Service** (`dps_service.py`)
+
+The main entry point and orchestrator of the system. It:
+- Parses YAML manifest files
+- Initializes data sources based on the manifest
+- Instantiates appropriate step processors based on step type
+- Manages the overall pipeline execution
+- Handles logging and error reporting
+
+### 2. **DPS Pipeline** (`dps_pipeline.py`)
+
+Represents a sequence of data preparation steps to be executed. It:
+- Maintains a list of steps (`DPSStep` objects)
+- Provides methods to add steps (`add_step()`, `add_steps()`)
+- Executes steps one at a time using `run_next_step()`
+- Tracks pipeline state and step count
+
+### 3. **Data Sources** (`dpsdataset/source.py`)
+
+Encapsulates data collections that flow through the pipeline:
+- **Source**: A named data collection with a strategy for loading/retrieving data
+- **Data Loading Strategies**: Different strategies for loading data:
+  - **FileDiscoveryStrategy**: Discovers files matching a pattern, extracts metadata via regex, and creates a DataFrame with file paths and extracted columns
+  - **CSVFileStrategy**: Loads data directly from CSV files with configurable headers and delimiters
+  - **None**: Used for intermediate sources
+- Sources can be registered by name and passed between steps
+- Data can be lazily loaded on demand via `get_data()`
+
+### 4. **Steps** (`step/`)
+
+Steps are processing units that implement the `DPSStep` base class. Each step type performs a specific function:
+
+#### **LoadStep** (implicit via `type: load`)
+- Creates a new Source from a file discovery or CSV load operation
+- Makes the data available for subsequent steps by registering it in the sources dictionary
+
+#### **CustomCommandStep** (`step/custom_command.py`)
+- Executes arbitrary shell commands
+- Supports two execution modes:
+  - **`once`**: Executes the command a single time
+  - **`per_row`**: Iterates through rows in a source and executes the command for each row, substituting field placeholders (e.g., `{slide_id}`)
+- Fields to substitute are automatically extracted from command text using regex
+- Respects the simulated/production mode setting
+
+#### **JoinStep** (`step/join.py`)
+- Merges two Sources based on matching key columns
+- Supports multiple join types: `inner`, `left`, `right`, `outer`
+- Creates a new output Source with the merged data
+- Uses pandas DataFrame merge operations internally
+
+#### **ExampleDPSStep** (`step/example_dps_step.py`)
+- A reference implementation demonstrating how to create custom DPS steps
+- Can be used as a template for implementing domain-specific processing steps
+
+### 5. **Data Loaders** (`dpsdataset/loaders.py`)
+
+A registry system for data loaders that handle different file formats:
+- Uses a `@register` decorator to register new loaders
+- Loaders can lazily load data on demand
+- Currently includes CSV loader as an example
+- Extensible for additional file types (DICOM, images, etc.)
+
+### Example: Registering a Custom Data Loader
+
+Here's how to register a custom data loader for a new file format which can then be used for lazy loading:
+
+```python
+from dpsdataset.loaders import register
+
+@register("json")
+class JSONLoader:
+    def __init__(self, path):
+        self.path = path
+    
+    def load(self):
+        import json
+        with open(self.path, 'r') as f:
+            return json.load(f)
+```
+
+You can then use this loader in your manifest by specifying `file_type: "json"` in a load step. The registered loader will be automatically instantiated when data needs to be loaded.
+
+
+### 6. **Lazy Dataframe** (`dpsdataset/lazy_dataframe`)
+A wrapper around pandas DataFrames that enables lazy loading and memory-efficient data access. It defers data materialization until explicitly requested via `get_data()`, allowing the pipeline to work with large datasets without loading everything into memory upfront. Supports row-level iteration and column access while maintaining compatibility with the standard DataFrame interface. Lazy loading mechanics are implemented, but will only be needed if extending the framework with new steps that work with the data directly. There might still be some issues here as this quality of dev-life feature is WIP.
+
+
+---
+
+## Data Flow Architecture
+
+```
+┌─────────────────────┐
+│  Parse Manifest     │
+│   (YAML file)       │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────────────────────────┐
+│  Initialize Sources & Steps             │
+│  - Create Source objects                │
+│  - Instantiate Steps                    │
+│  - Register sources by name             │
+└──────────┬──────────────────────────────┘
+           │
+           ▼
+┌─────────────────────────────────────────┐
+│  Execute Pipeline (Sequential)          │
+│  - Run each step one at a time          │
+│  - Steps can read from registered       │
+│    sources and write to new sources     |
+|    or the file system                   │
+│  - Sources remain available for         │
+│    subsequent steps                     │
+└──────────┬──────────────────────────────┘
+           │
+           ▼
+┌─────────────────────┐
+│  Final Output       │
+│  (Named Source)     │
+└─────────────────────┘
+```
+
+
+## Key Design Patterns
+
+### **Registry Pattern**
+Sources are registered by name in a dictionary, allowing steps to reference them by name without tight coupling. This enables:
+- Flexible step ordering
+- Easy composition of complex pipelines
+- Clear data dependencies through naming
+
+### **Strategy Pattern**
+Data loading uses different strategies (`FileDiscoveryStrategy`, `CSVFileStrategy`) without changing the Source interface. This:
+- Makes it easy to add new data source types
+- Keeps code modular and testable
+- Allows users to specify loading behavior in the manifest
+
+### **Lazy Loading**
+Data is not loaded until needed via `get_data()`. This:
+- Improves memory efficiency for large datasets
+- Allows pipelined processing
+- Enables simulated execution without actual file I/O
+
+### **Simulated vs Production Mode**
+All steps respect a `simulated` flag that:
+- In simulated mode: logs actions without executing actual commands
+- In production mode: executes all steps normally
+- Allows safe testing before running on real data
+
+### **Command Pattern**
+Each `DPSStep` encapsulates a request to perform a specific operation (load, transform, join, or execute a command) as an object.
+The manifest defines steps declaratively, and the pipeline treats each step as a command object that can be passed around, stored and executed on demand without the caller knowing the specific implementation details.
+
+
+---

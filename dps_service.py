@@ -9,10 +9,10 @@ import os
 import logging
 import yaml
 from dps_pipeline import DPSPipeline
-from dpsstep.custom_command import CustomCommandStep
+from step.custom_command import CustomCommandStep
 import dpsdataset.loaders as loaders
-from dpsstep.example_dps_step import ExampleDPSStep
-from dpsstep.join import JoinStep
+from step.example_dps_step import ExampleDPSStep
+from step.join import JoinStep
 from dpsdataset.source import FileDiscoveryStrategy, CSVFileStrategy, Source
 import re
 
