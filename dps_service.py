@@ -244,7 +244,7 @@ class DataPreparationForExploitationService:
             for step in steps:
                 step_name = step.get('step_name', '')
                 step_type = step.get('type', '')
-                enabled = step.get('enabled', False)
+                enabled = step.get('enabled', True)
                 params = step.get('params', {})
                 
                 if not enabled:
