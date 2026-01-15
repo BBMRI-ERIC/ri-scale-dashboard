@@ -1,7 +1,7 @@
 import logging
-from dpsdataset.Source import Source
-from dpsstep.DPSStep import DPSStep
-import dpsstep.ExampleDPSStep
+from dpsdataset.source import Source
+from dpsstep.step import DPSStep
+import dpsstep.example_dps_step
 
 logger = logging.getLogger(__name__)
 
@@ -78,8 +78,8 @@ if __name__ == "__main__":
     sources[source_intermediate.source_name] = source_intermediate
     sources[source_out.source_name] = source_out
     
-    pipeline.add_step(dpsstep.ExampleDPSStep.ExampleDPSStep(input_source=source_in, output_source=source_intermediate))
-    pipeline.add_step(dpsstep.ExampleDPSStep.ExampleDPSStep(input_source=source_intermediate, output_source=source_out))
+    pipeline.add_step(dpsstep.example_dps_step.ExampleDPSStep(input_source=source_in, output_source=source_intermediate))
+    pipeline.add_step(dpsstep.example_dps_step.ExampleDPSStep(input_source=source_intermediate, output_source=source_out))
     
     logger.info("DPS Pipeline initialized with %d steps.", len(pipeline.steps))
     

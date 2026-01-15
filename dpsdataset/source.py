@@ -7,8 +7,8 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 from traitlets import Type
 
-from .Loaders import getLoader
-from .LazyDataframe import LazyDataFrame
+from .loaders import getLoader
+from .lazy_dataframe import LazyDataFrame
 
 logger = logging.getLogger(__name__)
     
@@ -33,7 +33,7 @@ class FileDiscoveryStrategy(DataSourceStrategy):
     Strategy to discover files in a directory based on a pattern.
     """
     
-    def __init__(self, path:str, include:str="*.svs", recursive:bool=False, id_pattern:str="^(?P<slide_id>[^.]+)", loader:Callable=None, column_name:str="path"):
+    def __init__(self, path:str, include:str="*.svs", recursive:bool=False, id_pattern:str="^(?P<slide_id>[^.]+)", loader:Callable=None, column_name:str="path", directory_mode:bool=False):
         """
         Initialize the FileDiscoveryStrategy.
         Args:
@@ -54,6 +54,7 @@ class FileDiscoveryStrategy(DataSourceStrategy):
         self.id_pattern = id_pattern
         self.loader = loader
         self.column_name = column_name
+        self.directory_mode = directory_mode
         
         
     def __discover_files__(self):
@@ -64,7 +65,13 @@ class FileDiscoveryStrategy(DataSourceStrategy):
 
         results = []
         for file in files:
-            name = os.path.basename(file)
+            if self.directory_mode and os.path.isdir(file):
+                name = os.path.basename(os.path.normpath(file))
+            elif not self.directory_mode and os.path.isfile(file):
+                name = os.path.basename(file)
+            else:
+                continue
+            
             match = regex.match(name)
             if not match:
                 logger.warning("Filename %s does not match pattern %s", name, self.id_pattern)

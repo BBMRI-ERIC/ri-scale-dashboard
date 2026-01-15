@@ -1,6 +1,6 @@
 import logging
-from dpsdataset import Source
-from dpsstep.DPSStep import DPSStep
+from dpsdataset import source
+from dpsstep.step import DPSStep
 
 logger = logging.getLogger(__name__)
 
@@ -8,8 +8,8 @@ class ExampleDPSStep(DPSStep):
     """
     An example implementation of a DPS step.
     """
-    def __init__(self, input_source:Source, output_source:Source = None):
-        super().__init__("Example Step")
+    def __init__(self, input_source:source, output_source:source = None, simulated:bool=True):
+        super().__init__("Example Step", simulated=simulated)
         self.input_source = input_source
         if output_source is None:
             self.output_source = input_source

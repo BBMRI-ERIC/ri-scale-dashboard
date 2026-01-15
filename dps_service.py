@@ -8,15 +8,15 @@ import argparse
 import os
 import logging
 import yaml
-from DPSPipeline import DPSPipeline
-from dpsstep.customCommandStep import CustomCommandStep
-import dpsdataset.Loaders as Loaders
-from dpsstep.ExampleDPSStep import ExampleDPSStep
-from dpsstep.JoinStep import JoinStep
-from dpsdataset.Source import FileDiscoveryStrategy, CSVFileStrategy, Source
+from dps_pipeline import DPSPipeline
+from dpsstep.custom_command import CustomCommandStep
+import dpsdataset.loaders as loaders
+from dpsstep.example_dps_step import ExampleDPSStep
+from dpsstep.join import JoinStep
+from dpsdataset.source import FileDiscoveryStrategy, CSVFileStrategy, Source
 import re
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("dpsService")
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Validate pipeline arguments")
@@ -181,7 +181,7 @@ class DataPreparationForExploitationService:
         if error:
             return False
 
-        loader = Loaders.getLoader(file_type)
+        loader = loaders.getLoader(file_type)
         
         if mode == "discovery":
             source = Source(

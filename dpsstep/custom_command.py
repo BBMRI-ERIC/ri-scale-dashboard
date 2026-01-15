@@ -1,7 +1,7 @@
 import json
 import subprocess
-from dpsdataset import Source
-from dpsstep.DPSStep import DPSStep
+from dpsdataset import source
+from dpsstep.step import DPSStep
 import shlex
 import logging
 import os
@@ -9,7 +9,7 @@ import os
 logger = logging.getLogger(__name__)
 
 class CustomCommandStep(DPSStep):
-    def __init__(self, input_source:Source, command:str, fields:list[str]|None=None, execution_mode:str="per_row"):
+    def __init__(self, input_source:source, command:str, fields:list[str]|None=None, execution_mode:str="per_row", simulated:bool=True):
         """
         Initialize the CustomCommandStep.
         Args:
@@ -19,7 +19,7 @@ class CustomCommandStep(DPSStep):
             execution_mode (str): Mode of execution, e.g., "per_row".
         """
         
-        super().__init__(command)
+        super().__init__(command, simulated=simulated)
         self.input_source = input_source
         self.command = command
         self.fields = fields if fields is not None else []
@@ -33,6 +33,9 @@ class CustomCommandStep(DPSStep):
         Returns:
             subprocess.CompletedProcess: The result of the command execution.
         """
+        if self.simulated:
+            return subprocess.CompletedProcess(args=command, returncode=0, stdout="Simulated execution", stderr="")
+        
         try:
             args = shlex.split(command)
             proc = subprocess.run(args, check=True, text=True, capture_output=True)
@@ -49,12 +52,21 @@ class CustomCommandStep(DPSStep):
         Execute the custom command in Terminal
         """
         
+        if self.simulated:
+            sim_text = "[Simulated] "
+        else:
+            sim_text = ""
+        
         if self.execution_mode != "per_row":
-            logger.info("Executing command '"+self.command+"' once without per-row processing.")
-            self.__run_command__(self.command)
+            logger.info(f"{sim_text}Executing command '{self.command}' once without per-row processing.")
+            
+            prog = self.__run_command__(self.command)
+            if prog is None:
+                logger.error("Command execution failed.")
+                return False
             return True
         
-        logger.info("Executing command per row.")
+        logger.info(f"{sim_text}Executing command per row.")
             
         for _, row in self.input_source.get_data().iterrows():
             
@@ -65,14 +77,15 @@ class CustomCommandStep(DPSStep):
                     command_values[field] = row[field]
             except Exception:
                 logger.error("Cannot find field '" + field + "' in row with columns " + str(row.index.tolist()))
+                return False
                 
             final_command = self.command.format(**command_values)
-                
-            logger.info(f"Executing command: {final_command}")
+            
+            logger.info(f"{sim_text}Executing command: {final_command}")
 
             proc = self.__run_command__(final_command)
             if proc is None:
                 logger.error("Command execution failed for command with values: " + str(command_values))
-                #return False # Continue executing other rows even if one fails
+                return False
             
         return True
