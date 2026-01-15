@@ -331,16 +331,12 @@ Here's how to register a custom data loader for a new file format which can then
 
 ```python
 from dpsdataset.loaders import register
+import json
 
 @register("json")
-class JSONLoader:
-    def __init__(self, path):
-        self.path = path
-    
-    def load(self):
-        import json
-        with open(self.path, 'r') as f:
-            return json.load(f)
+def load(path):
+    with open(self.path, 'r') as f:
+        return json.load(f)
 ```
 
 You can then use this loader in your manifest by specifying `file_type: "json"` in a load step. The registered loader will be automatically instantiated when data needs to be loaded.
