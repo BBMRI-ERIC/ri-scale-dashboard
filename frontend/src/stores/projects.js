@@ -132,7 +132,13 @@ export const useProjectsStore = defineStore('projects', () => {
       // Simulate API delay
       await new Promise(resolve => setTimeout(resolve, 500))
       projects.value = MOCK_PROJECTS
-      // Default to "All" (null) - don't auto-select a project
+      // Default to first UC7 project
+      if (!selectedProjectId.value) {
+        const defaultProject = MOCK_PROJECTS.find(p => p.useCase === 'UC7' && p.status === 'active')
+        if (defaultProject) {
+          selectedProjectId.value = defaultProject.id
+        }
+      }
     } catch (e) {
       error.value = e.message || 'Failed to fetch projects'
     } finally {

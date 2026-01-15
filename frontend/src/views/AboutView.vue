@@ -26,21 +26,11 @@
             <!-- BBMRI-ERIC Logo -->
             <div class="logo-card glass">
               <div class="logo-wrapper bbmri">
-                <svg viewBox="0 0 200 80" class="logo-svg">
-                  <defs>
-                    <linearGradient id="bbmriGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                      <stop offset="0%" stop-color="#0077B6"/>
-                      <stop offset="100%" stop-color="#00B4D8"/>
-                    </linearGradient>
-                  </defs>
-                  <rect x="10" y="20" width="12" height="40" rx="2" fill="url(#bbmriGrad)"/>
-                  <rect x="28" y="20" width="12" height="40" rx="2" fill="url(#bbmriGrad)"/>
-                  <rect x="46" y="20" width="12" height="40" rx="2" fill="url(#bbmriGrad)"/>
-                  <rect x="64" y="25" width="12" height="30" rx="2" fill="url(#bbmriGrad)"/>
-                  <rect x="82" y="30" width="12" height="20" rx="2" fill="url(#bbmriGrad)"/>
-                  <text x="105" y="45" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#0077B6">BBMRI</text>
-                  <text x="105" y="60" font-family="Arial, sans-serif" font-size="10" fill="#64748b">ERIC</text>
-                </svg>
+                <img 
+                  src="/bbmri_logo.png" 
+                  alt="BBMRI-ERIC" 
+                  class="logo-img-wide"
+                />
               </div>
               <div class="logo-info">
                 <h3>BBMRI-ERIC</h3>
@@ -70,20 +60,11 @@
             <!-- Medical University of Graz Logo -->
             <div class="logo-card glass">
               <div class="logo-wrapper mug">
-                <svg viewBox="0 0 120 120" class="logo-svg square">
-                  <defs>
-                    <linearGradient id="mugGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                      <stop offset="0%" stop-color="#DC2626"/>
-                      <stop offset="100%" stop-color="#B91C1C"/>
-                    </linearGradient>
-                  </defs>
-                  <!-- Shield shape -->
-                  <path d="M60 10 L100 25 L100 65 Q100 95 60 110 Q20 95 20 65 L20 25 Z" 
-                        fill="none" stroke="url(#mugGrad)" stroke-width="3"/>
-                  <!-- Cross -->
-                  <rect x="55" y="30" width="10" height="50" fill="url(#mugGrad)"/>
-                  <rect x="40" y="45" width="40" height="10" fill="url(#mugGrad)"/>
-                </svg>
+                <img 
+                  src="/mug_logo.png" 
+                  alt="Medical University of Graz" 
+                  class="logo-img-wide"
+                />
               </div>
               <div class="logo-info">
                 <h3>Medical University of Graz</h3>
@@ -260,8 +241,8 @@ const features = [
 
 .logo-wrapper {
   width: 100%;
-  max-width: 200px;
-  height: 100px;
+  max-width: 260px;
+  height: 120px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -281,6 +262,14 @@ const features = [
 .logo-img {
   width: 80px;
   height: 80px;
+  object-fit: contain;
+}
+
+.logo-img-wide {
+  max-width: 240px;
+  max-height: 100px;
+  width: auto;
+  height: auto;
   object-fit: contain;
 }
 

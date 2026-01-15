@@ -16,75 +16,57 @@
       </transition>
     </div>
 
-    <!-- Main navigation -->
+    <!-- Global Navigation -->
     <v-list density="comfortable" nav class="sidebar-nav">
       <v-list-item
-        v-for="item in mainNavItems"
+        v-for="item in globalNavItems"
         :key="item.title"
         :to="item.to"
         :prepend-icon="item.icon"
         :title="item.title"
         rounded="lg"
         class="nav-item"
-      >
-        <template v-slot:append v-if="item.badge && !rail">
-          <v-badge
-            :content="item.badge"
-            color="primary"
-            inline
-          />
-        </template>
-      </v-list-item>
+      />
     </v-list>
 
-    <!-- Projects section -->
-    <template v-if="!rail">
-      <div class="sidebar-section-title">
-        <span>PROJECT SELECTION</span>
-      </div>
-    </template>
+    <!-- Project Context Section -->
+    <div class="section-divider" v-if="!rail">
+      <span class="section-label">{{ selectedProjectLabel }}</span>
+    </div>
+    <v-divider v-else class="mx-3 my-2" />
 
-    <v-list density="comfortable" nav class="project-nav">
-      <!-- All projects option -->
+    <v-list density="comfortable" nav class="sidebar-nav project-nav">
       <v-list-item
-        :active="projectsStore.selectedProjectId === null"
+        v-for="item in projectNavItems"
+        :key="item.title"
+        :to="item.to"
+        :prepend-icon="item.icon"
+        :title="item.title"
         rounded="lg"
-        class="project-item all-projects"
-        @click="selectProject(null)"
-      >
-        <template v-slot:prepend>
-          <div class="project-indicator all">
-            <v-icon size="16">mdi-view-grid</v-icon>
-          </div>
-        </template>
-        <v-list-item-title v-if="!rail" class="project-title">
-          All Projects
-        </v-list-item-title>
-      </v-list-item>
+        class="nav-item"
+      />
+    </v-list>
 
-      <!-- Divider between All and individual projects -->
-      <v-divider class="my-2 mx-3" />
+    <!-- BBMRI-ERIC External Links -->
+    <div class="section-divider" v-if="!rail">
+      <span class="section-label">BBMRI-ERIC</span>
+    </div>
+    <v-divider v-else class="mx-3 my-2" />
 
-      <!-- Individual projects -->
+    <v-list density="comfortable" nav class="sidebar-nav external-nav">
       <v-list-item
-        v-for="project in projectsStore.activeProjects.slice(0, 4)"
-        :key="project.id"
-        :active="project.id === projectsStore.selectedProjectId"
+        v-for="item in externalNavItems"
+        :key="item.title"
+        :href="item.href"
+        target="_blank"
+        :prepend-icon="item.icon"
+        :title="item.title"
         rounded="lg"
-        class="project-item"
-        @click="selectProject(project.id)"
+        class="nav-item"
       >
-        <template v-slot:prepend>
-          <div 
-            class="project-indicator" 
-            :class="project.useCase.toLowerCase()"
-          >
-            {{ project.useCase.replace('UC', '') }}
-          </div>
+        <template v-slot:append v-if="!rail">
+          <v-icon size="14" class="external-icon">mdi-open-in-new</v-icon>
         </template>
-        <v-list-item-title v-if="!rail" class="project-title">
-          {{ project.shortTitle }}
-        </v-list-item-title>
       </v-list-item>
     </v-list>
 
@@ -179,17 +161,34 @@ function openSettings() {
   showSettings.value = true
 }
 
-// Navigation items
-const mainNavItems = [
+// Global navigation (project-independent)
+const globalNavItems = [
   { title: 'Dashboard', icon: 'mdi-view-dashboard', to: '/dashboard' },
-  { title: 'Directory', icon: 'mdi-database-search', to: '/directory' },
-  { title: 'Negotiator', icon: 'mdi-handshake', to: '/negotiator' },
+  { title: 'Model Hub', icon: 'mdi-brain', to: '/models' },
+]
+
+// Project-dependent navigation
+const projectNavItems = [
   { title: 'Datasets', icon: 'mdi-database', to: '/datasets' },
   { title: 'Data Transfers', icon: 'mdi-swap-horizontal', to: '/transfers' },
   { title: 'HPC Jobs', icon: 'mdi-chip', to: '/computations' },
-  { title: 'Model Hub', icon: 'mdi-brain', to: '/models' },
   { title: 'Compute Quotas', icon: 'mdi-server', to: '/resources' },
 ]
+
+// External BBMRI-ERIC links
+const externalNavItems = [
+  { title: 'Directory', icon: 'mdi-database-search', href: 'https://directory.bbmri-eric.eu/ERIC/directory/#/catalogue' },
+  { title: 'Negotiator', icon: 'mdi-handshake', href: 'https://negotiator.bbmri-eric.eu/' },
+]
+
+// Selected project label
+const selectedProjectLabel = computed(() => {
+  if (!projectsStore.selectedProjectId) {
+    return 'Project: All'
+  }
+  const project = projectsStore.activeProjects.find(p => p.id === projectsStore.selectedProjectId)
+  return project ? `Project: ${project.shortTitle}` : 'Project: All'
+})
 
 const bottomNavItems = [
   { title: 'About', icon: 'mdi-information-outline', to: '/about' },
@@ -203,10 +202,6 @@ const primaryRole = computed(() => {
   if (roles.includes('researcher')) return 'Researcher'
   return 'User'
 })
-
-function selectProject(projectId) {
-  projectsStore.selectProject(projectId)
-}
 
 async function handleLogout() {
   await authStore.logout()
@@ -292,76 +287,44 @@ async function handleLogout() {
   }
 }
 
-// Section title
-.sidebar-section-title {
+.external-icon {
+  color: #64748b;
+  opacity: 0.7;
+}
+
+// Section dividers
+.section-divider {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  padding: 1rem 1rem 0.5rem;
-  font-size: 0.6875rem;
+  padding: 0.75rem 1rem 0.375rem;
+  gap: 0.5rem;
+  
+  &::before,
+  &::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: rgba(51, 65, 85, 0.5);
+  }
+  
+  &::before {
+    flex: 0;
+    width: 0;
+  }
+}
+
+.section-label {
+  font-size: 0.625rem;
   font-weight: 600;
   color: #64748b;
-  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
 }
 
-// Project nav
-.project-nav {
-  padding: 0 0.5rem;
-  
-  :deep(.v-list-item__prepend) {
-    width: 24px;
-    margin-inline-end: 16px !important;
-  }
-}
-
-.project-item {
-  margin-bottom: 0.25rem;
-  
-  &:hover {
-    background: rgba(51, 65, 85, 0.3);
-  }
-  
-  &.v-list-item--active {
-    background: rgba(230, 152, 48, 0.1);
-    border-left: 2px solid #E69830;
-  }
-}
-
-.project-indicator {
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.7rem;
-  font-weight: 700;
-  font-family: 'JetBrains Mono', monospace;
-  
-  &.all {
-    background: rgba(100, 116, 139, 0.2);
-    color: #94a3b8;
-  }
-  
-  &.uc7 {
-    background: rgba(230, 152, 48, 0.2);
-    color: #E69830;
-  }
-  
-  &.uc8 {
-    background: rgba(139, 92, 246, 0.2);
-    color: #a78bfa;
-  }
-}
-
-.project-title {
-  font-size: 0.8125rem;
-  color: #e2e8f0;
-}
-
-.progress-text {
-  font-size: 0.5rem;
-  font-family: 'JetBrains Mono', monospace;
+.project-nav,
+.external-nav {
+  padding-top: 0.25rem !important;
 }
 
 // Bottom section

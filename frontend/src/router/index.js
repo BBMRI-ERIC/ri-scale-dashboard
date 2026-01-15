@@ -35,24 +35,6 @@ const routes = [
     }
   },
   {
-    path: '/directory',
-    name: 'directory',
-    component: () => import('@/views/DirectoryView.vue'),
-    meta: { 
-      requiresAuth: true,
-      title: 'Directory'
-    }
-  },
-  {
-    path: '/negotiator',
-    name: 'negotiator',
-    component: () => import('@/views/NegotiatorView.vue'),
-    meta: { 
-      requiresAuth: true,
-      title: 'Negotiator'
-    }
-  },
-  {
     path: '/datasets',
     name: 'datasets',
     component: () => import('@/views/DatasetsView.vue'),
