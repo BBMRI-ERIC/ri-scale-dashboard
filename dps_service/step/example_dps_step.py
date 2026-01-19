@@ -1,6 +1,6 @@
 import logging
 from dpsdataset import source
-from dpsstep.step import DPSStep
+from step.step import DPSStep
 
 logger = logging.getLogger(__name__)
 

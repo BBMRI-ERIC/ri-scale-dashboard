@@ -1,7 +1,7 @@
 import json
 import subprocess
 from dpsdataset import source
-from dpsstep.step import DPSStep
+from step.step import DPSStep
 import shlex
 import logging
 import os

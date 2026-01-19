@@ -1,5 +1,5 @@
 from RIScale.dpsdataset import Source
-from dpsstep.step import DPSStep
+from step.step import DPSStep
 
 logger = logging.getLogger(__name__)
 class ImageCompressionStep(DPSStep):
