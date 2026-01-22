@@ -1,0 +1,289 @@
+# Step Types Configuration Schema
+# Defines all supported DPS pipeline step types with their parameters,
+# defaults, validation rules, and UI metadata for the Pipeline Builder GUI.
+
+# Schema Version
+version: "1.0"
+description: "DPS Step Types Configuration - used by both backend and frontend"
+
+# Step type definitions
+step_types:
+  # Load Step: Imports data from files or CSV into named sources
+  load:
+    backend_type: "load"
+    display_name: "Data Loader"
+    icon: "mdi-database-import-outline"
+    description: "Import raw data into the workspace"
+    help_text: "Load data from files (discovery mode) or CSV files into a named source for use in subsequent steps."
+
+    params:
+      # Common load parameters
+      output_source_name:
+        label: "Output Source Name"
+        type: "string"
+        required: true
+        default: null
+        help_text: "Name to register this data source (e.g., 'wsi_source', 'labels')"
+        validation:
+          pattern: "^[a-zA-Z_][a-zA-Z0-9_]*$"
+          error_message: "Must start with letter or underscore, contain only alphanumeric and underscore"
+
+      mode:
+        label: "Load Mode"
+        type: "enum"
+        required: true
+        default: null
+        enum_values:
+          - value: "discovery"
+            label: "File Discovery"
+            help_text: "Discover files matching a pattern and extract metadata from filenames"
+          - value: "csv_file"
+            label: "CSV File"
+            help_text: "Load data directly from a CSV file"
+        help_text: "Choose how to load the data"
+
+      path:
+        label: "Data Path"
+        type: "string"
+        required: true
+        default: null
+        help_text: "Directory path (for discovery) or file path (for CSV)"
+        validation:
+          error_message: "Must be a valid file or directory path"
+
+      # Discovery-specific parameters
+      include:
+        label: "File Pattern"
+        type: "string"
+        required_when: "mode == 'discovery'"
+        default: null
+        help_text: 'File glob pattern to match (e.g., "*.svs", "*.dcm", "*")'
+        examples: ["*.svs", "*.dcm", "*.png", "*"]
+
+      recursive:
+        label: "Search Recursively"
+        type: "boolean"
+        required: false
+        default: false
+        conditional_on: "mode"
+        conditional_value: "discovery"
+        help_text: "If enabled, search in subdirectories recursively"
+
+      directory_mode:
+        label: "Treat Directories as Items"
+        type: "boolean"
+        required: false
+        default: false
+        conditional_on: "mode"
+        conditional_value: "discovery"
+        help_text: "If enabled, treat directories as data items instead of files"
+
+      columns:
+        label: "Column Configuration"
+        type: "object"
+        required_when: "mode == 'discovery' || mode == 'csv_file'"
+        help_text: "Define how to extract and handle data columns"
+
+        # Discovery mode columns
+        column_name:
+          label: "Path Column Name"
+          type: "string"
+          required_when: "mode == 'discovery'"
+          default: null
+          conditional_on: "mode"
+          conditional_value: "discovery"
+          help_text: "Column name to store file/directory paths (e.g., 'wsi_path', 'file_path')"
+          examples: ["wsi_path", "dcm_path", "file_path"]
+
+        filename_to_columnname:
+          label: "Filename to Column Regex"
+          type: "string"
+          required_when: "mode == 'discovery'"
+          default: null
+          conditional_on: "mode"
+          conditional_value: "discovery"
+          help_text: "Regex pattern with named groups to extract metadata from filename. Each group becomes a column."
+          examples:
+            - "^(?P<slide_id>.+?)(?=\\.svs$)"
+            - "^(?P<case_id>.+?)_(?P<stain>.+?)$"
+            - "^(?P<patient_id>.+?)(?=\\.dcm$)"
+          validation:
+            error_message: "Must be a valid regex pattern with at least one named group (e.g., ?P<name>)"
+
+        # CSV mode columns
+        header:
+          label: "CSV Has Header"
+          type: "boolean"
+          required: false
+          default: true
+          conditional_on: "mode"
+          conditional_value: "csv_file"
+          help_text: "Whether the CSV file has a header row"
+
+        delimiter:
+          label: "CSV Delimiter"
+          type: "string"
+          required: false
+          default: ","
+          conditional_on: "mode"
+          conditional_value: "csv_file"
+          help_text: "Field delimiter character"
+          examples: [",", ";", "\t", "|"]
+
+      file_type:
+        label: "Data Loader Type"
+        type: "enum"
+        required: false
+        default: null
+        enum_values:
+          - value: "default"
+            label: "Default"
+          - value: "wsi"
+            label: "Whole Slide Image"
+          - value: "csv"
+            label: "CSV"
+        help_text: "Specifies which data loader to use for lazy loading. Leave empty for standard behavior."
+
+  # Custom Command Step: Execute shell commands
+  custom_command:
+    backend_type: "custom_command"
+    display_name: "Run Command"
+    icon: "mdi-console"
+    description: "Execute a custom command or script"
+    help_text: "Run shell commands either once or for each row in an input source. Supports placeholders for row data."
+
+    params:
+      command:
+        label: "Shell Command"
+        type: "string"
+        required: true
+        default: null
+        help_text: "Shell command to execute. Use placeholders like {column_name} for per-row substitution."
+        examples:
+          - "rm -rf ./output"
+          - "mkdir -p ./output"
+          - "wsidicomizer -i {wsi_path} -o ./output/{slide_id}"
+
+      execution_mode:
+        label: "Execution Mode"
+        type: "enum"
+        required: false
+        default: "per_row"
+        enum_values:
+          - value: "once"
+            label: "Execute Once"
+            help_text: "Run the command a single time without row substitution"
+          - value: "per_row"
+            label: "Execute Per Row"
+            help_text: "Run once for each row in the input source, substituting placeholders"
+        help_text: "When to execute the command"
+
+      input_source_name:
+        label: "Input Source"
+        type: "string"
+        required_when: "execution_mode == 'per_row'"
+        default: null
+        help_text: "Name of the source to iterate over (required for per-row mode)"
+        validation:
+          error_message: "Must reference an existing source"
+
+  # Join Step: Merge data sources
+  join:
+    backend_type: "join"
+    display_name: "Join"
+    icon: "mdi-source-merge"
+    description: "Join branches or merge outputs"
+    help_text: "Merge two data sources based on matching key columns to create unified datasets."
+
+    params:
+      left_source_name:
+        label: "Left Source"
+        type: "string"
+        required: true
+        default: null
+        help_text: "Name of the left data source to join"
+        validation:
+          error_message: "Must reference an existing source"
+
+      right_source_name:
+        label: "Right Source"
+        type: "string"
+        required: true
+        default: null
+        help_text: "Name of the right data source to join"
+        validation:
+          error_message: "Must reference an existing source"
+
+      output_source_name:
+        label: "Output Source Name"
+        type: "string"
+        required: true
+        default: null
+        help_text: "Name to register the joined result"
+        validation:
+          pattern: "^[a-zA-Z_][a-zA-Z0-9_]*$"
+          error_message: "Must start with letter or underscore, contain only alphanumeric and underscore"
+
+      left_key:
+        label: "Left Key Column"
+        type: "string"
+        required: true
+        default: "slide_id"
+        help_text: "Column name in the left source to join on"
+        examples: ["slide_id", "case_id", "patient_id", "id"]
+
+      right_key:
+        label: "Right Key Column"
+        type: "string"
+        required: true
+        default: "slide_id"
+        help_text: "Column name in the right source to join on"
+        examples: ["slide_id", "case_id", "patient_id", "id"]
+
+      join_type:
+        label: "Join Type"
+        type: "enum"
+        required: false
+        default: "inner"
+        enum_values:
+          - value: "inner"
+            label: "Inner Join"
+            help_text: "Keep only rows with matching keys in both sources"
+          - value: "left"
+            label: "Left Join"
+            help_text: "Keep all rows from left source, match right where possible"
+          - value: "right"
+            label: "Right Join"
+            help_text: "Keep all rows from right source, match left where possible"
+          - value: "outer"
+            label: "Outer Join"
+            help_text: "Keep all rows from both sources"
+        help_text: "Type of join operation to perform"
+
+      missing_policy:
+        label: "Missing Value Policy"
+        type: "enum"
+        required: false
+        default: "drop"
+        enum_values:
+          - value: "drop"
+            label: "Drop"
+            help_text: "Remove rows with unmatched keys (default, currently only implemented option)"
+        help_text: "How to handle rows with missing matches (currently only drop is supported)"
+
+# UI Hints for form generation
+ui_hints:
+  conditional_field_display: true
+  allow_custom_source_names: true
+  require_source_validation: true
+  show_inline_help: true
+  collapsible_sections: true
+
+# Notes for developers
+notes:
+  - "Frontend type 'custom' should map to backend type 'custom_command'"
+  - "Conditional required fields are enforced at runtime based on other field values"
+  - "Source names must be unique within a manifest"
+  - "Placeholders in custom_command are auto-detected via regex and must match column names in the input source"
+  - "missing_policy in join is not yet fully implemented; currently only 'drop' behavior is supported"
+  - "CSV header default is true (doc) but code may differ; verify at runtime"

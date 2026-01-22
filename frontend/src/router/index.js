@@ -80,6 +80,15 @@ const routes = [
     }
   },
   {
+    path: '/pipelines',
+    name: 'pipeline-builder',
+    component: () => import('@/views/PipelineBuilderView.vue'),
+    meta: { 
+      requiresAuth: true,
+      title: 'Pipeline Builder'
+    }
+  },
+  {
     path: '/about',
     name: 'about',
     component: () => import('@/views/AboutView.vue'),
