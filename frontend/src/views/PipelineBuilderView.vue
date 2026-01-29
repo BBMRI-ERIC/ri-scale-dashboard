@@ -143,120 +143,176 @@
                 <div v-else class="stage-form">
                   <div class="text-subtitle-2 mb-2">{{ selectedStage.name }}</div>
                   <div class="text-caption text-medium-emphasis mb-4">Type: {{ selectedStage.type }}</div>
-                  
-                  <!-- Display Name -->
-                  <v-text-field
-                    v-model="selectedStage.config.name"
-                    label="Display Name"
-                    variant="outlined"
-                    density="compact"
-                    hide-details
-                    class="mb-3"
-                  />
-                  
-                  <!-- Enable Toggle -->
-                  <v-switch
-                    v-model="selectedStage.config.enabled"
-                    color="primary"
-                    label="Enable stage"
-                    hide-details
-                    class="mb-4"
-                  />
-                  
-                  <v-divider class="mb-4" />
-                  
-                  <!-- Dynamic Step Parameters -->
-                  <div v-if="selectedStageConfig" class="step-params">
-                    <div class="text-subtitle-2 mb-3">Configuration</div>
-                    
-                    <template v-for="(paramConfig, paramKey) in selectedStageConfig.params" :key="paramKey">
-                      <div v-if="shouldShowParam(paramKey, paramConfig)" class="param-field mb-3">
-                        <!-- String fields -->
-                        <v-text-field
-                          v-if="paramConfig.type === 'string'"
-                          v-model="selectedStage.config[paramKey]"
-                          :label="paramConfig.label"
-                          :hint="paramConfig.helpText"
-                          :placeholder="getParamPlaceholder(paramConfig)"
-                          :required="isParamRequiredForStage(paramKey, paramConfig)"
-                          variant="outlined"
-                          density="compact"
-                          persistent-hint
-                        />
-                        
-                        <!-- Boolean fields -->
-                        <v-switch
-                          v-else-if="paramConfig.type === 'boolean'"
-                          v-model="selectedStage.config[paramKey]"
-                          :label="paramConfig.label"
-                          :hint="paramConfig.helpText"
-                          color="primary"
-                          persistent-hint
-                          hide-details="auto"
-                        />
-                        
-                        <!-- Enum/Select fields -->
-                        <v-select
-                          v-else-if="paramConfig.type === 'enum'"
-                          v-model="selectedStage.config[paramKey]"
-                          :label="paramConfig.label"
-                          :hint="paramConfig.helpText"
-                          :items="paramConfig.enumValues"
-                          item-title="label"
-                          item-value="value"
-                          :required="isParamRequiredForStage(paramKey, paramConfig)"
-                          variant="outlined"
-                          density="compact"
-                          persistent-hint
-                        />
-                        
-                        <!-- Object fields (nested) -->
-                        <v-expansion-panels v-else-if="paramConfig.type === 'object'" variant="accordion">
-                          <v-expansion-panel>
-                            <v-expansion-panel-title>
-                              {{ paramConfig.label }}
-                              <template v-if="paramConfig.helpText">
-                                <v-tooltip location="top">
-                                  <template v-slot:activator="{ props }">
-                                    <v-icon v-bind="props" size="small" class="ml-2">mdi-help-circle-outline</v-icon>
-                                  </template>
-                                  {{ paramConfig.helpText }}
-                                </v-tooltip>
-                              </template>
-                            </v-expansion-panel-title>
-                            <v-expansion-panel-text>
-                              <template v-for="(subParamConfig, subParamKey) in getObjectSubParams(paramConfig)" :key="subParamKey">
-                                <div v-if="shouldShowParam(subParamKey, subParamConfig)" class="mb-3">
-                                  <!-- String sub-fields -->
-                                  <v-text-field
-                                    v-if="subParamConfig.type === 'string'"
-                                    v-model="getOrCreateNestedParam(paramKey)[subParamKey]"
-                                    :label="subParamConfig.label"
-                                    :hint="subParamConfig.helpText"
-                                    :placeholder="getParamPlaceholder(subParamConfig)"
-                                    variant="outlined"
-                                    density="compact"
-                                    persistent-hint
-                                  />
-                                  
-                                  <!-- Boolean sub-fields -->
-                                  <v-switch
-                                    v-else-if="subParamConfig.type === 'boolean'"
-                                    v-model="getOrCreateNestedParam(paramKey)[subParamKey]"
-                                    :label="subParamConfig.label"
-                                    :hint="subParamConfig.helpText"
-                                    color="primary"
-                                    persistent-hint
-                                    hide-details="auto"
-                                  />
-                                </div>
-                              </template>
-                            </v-expansion-panel-text>
-                          </v-expansion-panel>
-                        </v-expansion-panels>
-                      </div>
+
+                  <!-- Chain-specific form -->
+                  <template v-if="isChainStage(selectedStage)">
+                    <div class="text-body-2 text-medium-emphasis mb-2" style="margin-left: 12px;">Composite command chain</div>
+                    <div class="text-caption text-medium-emphasis mb-4" v-if="selectedChainDefinition?.description" style="margin-left: 12px;">
+                      {{ selectedChainDefinition.description }}
+                    </div>
+
+                    <v-text-field
+                      v-model="selectedStage.config.name"
+                      label="Display Name"
+                      variant="outlined"
+                      density="compact"
+                      hide-details
+                      class="mb-3"
+                      style="margin-left: 12px;"
+                    />
+
+                    <v-switch
+                      v-model="selectedStage.config.enabled"
+                      color="primary"
+                      label="Enable chain"
+                      hide-details
+                      class="mb-4"
+                      style="margin-left: 12px;"
+                    />
+
+                    <v-divider class="mb-4" style="margin-left: 12px;" />
+
+                    <div class="text-subtitle-2 mb-2" style="margin-left: 12px;">Inputs</div>
+                    <div class="text-caption text-medium-emphasis mb-3" style="margin-left: 12px;">Values are substituted into the chain steps.</div>
+                    <template v-for="sub in selectedChainFormInputs || []" :key="sub.name">
+                      <v-text-field
+                        v-model="selectedStage.config.userInputs[sub.name]"
+                        :label="sub.label || sub.name"
+                        :placeholder="sub.default || ''"
+                        :hint="sub.helpText"
+                        variant="outlined"
+                        density="compact"
+                        class="mb-3"
+                        style="margin-left: 12px;"
+                      />
                     </template>
-                  </div>
+
+                    <div class="mb-3" style="margin-left: 12px;">
+                      <div class="text-subtitle-2 mb-2">Chain Steps:</div>
+                      <ul>
+                        <li v-for="(step, idx) in selectedChainDefinition?.chain || []" :key="idx">
+                          {{ getStepTypeConfig(step.type)?.displayName || step.type }}
+                        </li>
+                      </ul>
+                    </div>
+                  </template>
+
+                  <!-- Regular step form -->
+                  <template v-else>
+                    <!-- Display Name -->
+                    <v-text-field
+                      v-model="selectedStage.config.name"
+                      label="Display Name"
+                      variant="outlined"
+                      density="compact"
+                      hide-details
+                      class="mb-3"
+                    />
+                    
+                    <!-- Enable Toggle -->
+                    <v-switch
+                      v-model="selectedStage.config.enabled"
+                      color="primary"
+                      label="Enable stage"
+                      hide-details
+                      class="mb-4"
+                    />
+                    
+                    <v-divider class="mb-4" />
+                    
+                    <!-- Dynamic Step Parameters -->
+                    <div v-if="selectedStageConfig" class="step-params">
+                      <div class="text-subtitle-2 mb-3">Configuration</div>
+                      
+                      <template v-for="(paramConfig, paramKey) in selectedStageConfig.params" :key="paramKey">
+                        <div v-if="shouldShowParam(paramKey, paramConfig)" class="param-field mb-3">
+                          <!-- String fields -->
+                          <v-text-field
+                            v-if="paramConfig.type === 'string'"
+                            v-model="selectedStage.config[paramKey]"
+                            :label="paramConfig.label"
+                            :hint="paramConfig.helpText"
+                            :placeholder="getParamPlaceholder(paramConfig)"
+                            :required="isParamRequiredForStage(paramKey, paramConfig)"
+                            variant="outlined"
+                            density="compact"
+                            persistent-hint
+                          />
+                          
+                          <!-- Boolean fields -->
+                          <v-switch
+                            v-else-if="paramConfig.type === 'boolean'"
+                            v-model="selectedStage.config[paramKey]"
+                            :label="paramConfig.label"
+                            :hint="paramConfig.helpText"
+                            color="primary"
+                            persistent-hint
+                            hide-details="auto"
+                          />
+                          
+                          <!-- Enum/Select fields -->
+                          <v-select
+                            v-else-if="paramConfig.type === 'enum'"
+                            v-model="selectedStage.config[paramKey]"
+                            :label="paramConfig.label"
+                            :hint="paramConfig.helpText"
+                            :items="paramConfig.enumValues"
+                            item-title="label"
+                            item-value="value"
+                            :required="isParamRequiredForStage(paramKey, paramConfig)"
+                            variant="outlined"
+                            density="compact"
+                            persistent-hint
+                          />
+                          
+                          <!-- Object fields (nested) -->
+                          <v-expansion-panels v-else-if="paramConfig.type === 'object'" variant="accordion">
+                            <v-expansion-panel>
+                              <v-expansion-panel-title>
+                                {{ paramConfig.label }}
+                                <template v-if="paramConfig.helpText">
+                                  <v-tooltip location="top">
+                                    <template v-slot:activator="{ props }">
+                                      <v-icon v-bind="props" size="small" class="ml-2">mdi-help-circle-outline</v-icon>
+                                    </template>
+                                    {{ paramConfig.helpText }}
+                                  </v-tooltip>
+                                </template>
+                              </v-expansion-panel-title>
+                              <v-expansion-panel-text>
+                                <template v-for="(subParamConfig, subParamKey) in getObjectSubParams(paramConfig)" :key="subParamKey">
+                                  <div v-if="shouldShowParam(subParamKey, subParamConfig)" class="mb-3">
+                                    <!-- String sub-fields -->
+                                    <v-text-field
+                                      v-if="subParamConfig.type === 'string'"
+                                      v-model="getOrCreateNestedParam(paramKey)[subParamKey]"
+                                      :label="subParamConfig.label"
+                                      :hint="subParamConfig.helpText"
+                                      :placeholder="getParamPlaceholder(subParamConfig)"
+                                      variant="outlined"
+                                      density="compact"
+                                      persistent-hint
+                                    />
+                                    
+                                    <!-- Boolean sub-fields -->
+                                    <v-switch
+                                      v-else-if="subParamConfig.type === 'boolean'"
+                                      v-model="getOrCreateNestedParam(paramKey)[subParamKey]"
+                                      :label="subParamConfig.label"
+                                      :hint="subParamConfig.helpText"
+                                      color="primary"
+                                      persistent-hint
+                                      hide-details="auto"
+                                    />
+                                  </div>
+                                </template>
+                              </v-expansion-panel-text>
+                            </v-expansion-panel>
+                          </v-expansion-panels>
+                        </div>
+                      </template>
+                    </div>
+                  </template>
                   
                   <v-divider class="my-4" />
                   <div class="text-caption text-medium-emphasis mb-1">Stage ID</div>
@@ -322,15 +378,42 @@ const isSyncingFromStages = ref(false)
 const isSyncingFromYaml = ref(false)
 let yamlParseTimer = null
 
-// Build stage library from shared config
+// Build stage library from shared config (step types + command chains)
 const stageLibrary = computed(() => {
   const stepTypes = STEP_TYPES_CONFIG.stepTypes || {}
-  return Object.keys(stepTypes).map(key => ({
+  const chains = STEP_TYPES_CONFIG.commandChains || {}
+
+  const typeEntries = Object.keys(stepTypes).map(key => ({
     name: stepTypes[key].displayName,
     type: stepTypes[key].backendType || key,
     icon: stepTypes[key].icon,
     description: `Type: ${stepTypes[key].backendType || key} - ${stepTypes[key].description}`,
+    isChain: false,
   }))
+
+  const chainEntries = Object.keys(chains).map(key => {
+    const chainDef = chains[key] || {}
+    // Map substitutions to a userInputs object for form binding (include per_row column selectors)
+    const userInputs = (chainDef.substitutions || [])
+      .reduce((acc, s) => {
+        acc[s.name] = { name: s.name, label: s.label, default: s.default, helpText: s.help_text || s.helpText, scope: s.scope }
+        return acc
+      }, {})
+
+    return {
+      name: chainDef.displayName || key,
+      type: 'command_chain',
+      icon: chainDef.icon || 'mdi-source-merge',
+      description: chainDef.description || 'Composite command chain',
+      isChain: true,
+      chainKey: key,
+      chain: chainDef.chain || [],
+      userInputs,
+      substitutions: chainDef.substitutions || [],
+    }
+  })
+
+  return [...chainEntries, ...typeEntries]
 })
 
 // Pipeline stages
@@ -345,7 +428,45 @@ const selectedStage = computed(() => {
 // Get config for the selected stage
 const selectedStageConfig = computed(() => {
   if (!selectedStage.value) return null
+  if (isChainStage(selectedStage.value)) return null
   return getStepTypeConfig(selectedStage.value.type)
+})
+
+const selectedChainDefinition = computed(() => {
+  if (!selectedStage.value || !isChainStage(selectedStage.value)) return null
+  return getChainDefinition(selectedStage.value.config.chainKey)
+})
+
+// Flatten form-scoped substitutions for the selected chain into an array the template can iterate
+const selectedChainUserInputs = computed(() => {
+  const def = selectedChainDefinition.value
+  if (!def) return []
+  const subs = def.substitutions || []
+  // include all substitutions (form-scoped and per_row) so column name selectors are shown
+  return subs.map(s => ({ name: s.name, label: s.label, default: s.default, helpText: s.help_text || s.helpText, scope: s.scope }))
+})
+
+// Expose step parameter exposures that are visible and resolved at form time
+const selectedChainExposures = computed(() => {
+  const def = selectedChainDefinition.value
+  if (!def) return []
+  const exposures = def.step_param_exposure || def.stepParamExposure || []
+  return exposures
+    .filter(e => e.visible === true && (e.resolve_timing === 'form' || e.resolveTiming === 'form' || !e.resolve_timing))
+    .map(e => {
+      const stepId = e.step_id || e.stepId || e.stepId || 'step'
+      const param = e.param || e.paramName || e.param_name || 'param'
+      const name = `${stepId}.${param.replace(/\./g, '_')}`
+      return { name, label: e.label || `${stepId} ${param}`, default: e.default, helpText: e.help_text || e.helpText, stepId, param }
+    })
+})
+
+const selectedChainFormInputs = computed(() => {
+  // merge form-scoped substitutions and visible exposures; exposures may override if same name
+  const map = {}
+  selectedChainUserInputs.value.forEach(s => { map[s.name] = s })
+  selectedChainExposures.value.forEach(e => { map[e.name] = e })
+  return Object.values(map)
 })
 
 // Generate unique ID for stages
@@ -371,22 +492,145 @@ function addStage(stageDefinition) {
   const definition = (stageDefinition && typeof stageDefinition === 'object')
     ? stageDefinition
     : stageLibrary.value.find(s => s.name === stageDefinition)
-      //|| stageLibrary.value.find(s => s.type === 'custom_command')
-      //|| { name: 'Run Command', type: 'custom_command', icon: 'mdi-console' }
 
-  const id = generateId()
+  if (!definition) return
+
+  // If this is a composite command chain, expand to concrete steps
+  if (definition.isChain) {
+    createChainStage(definition)
+    return
+  }
+
   const stageName = definition.name || 'Custom Stage'
+  createStage(definition.type, stageName)
+}
+
+function createChainStage(definition) {
+  const id = generateId()
+  const chainDef = getChainDefinition(definition.chainKey)
+  const defaults = {}
+
+  // Defaults from substitutions (include per_row so column selectors are initialised)
+  const subs = (chainDef?.substitutions || [])
+  subs.forEach(s => { defaults[s.name] = s.default ?? '' })
+
+  // Defaults from step parameter exposures that resolve at form time
+  const exposures = chainDef?.step_param_exposure || chainDef?.stepParamExposure || []
+  exposures.filter(e => (e.resolve_timing === 'form' || e.resolveTiming === 'form') ).forEach(e => {
+    const stepId = e.step_id || e.stepId || e.stepId
+    const param = e.param || e.paramName || e.param_name || 'param'
+    const key = `${stepId}.${param.replace(/\./g, '_')}`
+    defaults[key] = e.default ?? ''
+  })
+
+  const stageName = definition.name || 'Command Chain'
 
   stages.value.push({
     id,
     name: stageName,
-    type: definition.type, //|| guessStepType(stageName),
+    type: 'command_chain',
     config: {
       name: stageName,
       enabled: true,
+      command_chain_type: definition.chainKey,
+      chain_command_name: stageName,
+      chainKey: definition.chainKey,
+        userInputs: defaults,
     },
   })
   selectedStageId.value = id
+}
+
+function createStage(stepType, stageName, paramOverrides = {}) {
+  const id = generateId()
+  const defaults = buildDefaultsFromConfig(stepType)
+  const config = {
+    name: stageName,
+    enabled: true,
+    ...defaults,
+    ...paramOverrides,
+  }
+
+  stages.value.push({
+    id,
+    name: stageName,
+    type: stepType,
+    config,
+  })
+  selectedStageId.value = id
+}
+
+// Build initial config values using defaults from step type schema
+function buildDefaultsFromConfig(stepType) {
+  const typeConfig = getStepTypeConfig(stepType)
+  if (!typeConfig || !typeConfig.params) return {}
+
+  const config = {}
+  for (const [key, param] of Object.entries(typeConfig.params)) {
+    if (param.type === 'object') {
+      config[key] = buildObjectDefaults(param)
+    } else if (Object.prototype.hasOwnProperty.call(param, 'default')) {
+      config[key] = param.default
+    }
+  }
+  return config
+}
+
+function buildObjectDefaults(paramConfig) {
+  const nested = {}
+  for (const [subKey, subParam] of Object.entries(paramConfig)) {
+    if (!subParam || typeof subParam !== 'object' || !subParam.type) continue
+    if (subParam.type === 'object') {
+      nested[subKey] = buildObjectDefaults(subParam)
+    } else if (Object.prototype.hasOwnProperty.call(subParam, 'default')) {
+      nested[subKey] = subParam.default
+    }
+  }
+  return nested
+}
+
+function toSnakeCase(str) {
+  return str.replace(/([A-Z])/g, '_$1').toLowerCase()
+}
+
+function isChainStage(stage) {
+  return stage?.type === 'command_chain'
+}
+
+function getChainDefinition(chainKey) {
+  const chains = STEP_TYPES_CONFIG.commandChains || {}
+  return chains[chainKey]
+}
+
+/**
+ * Replace placeholder tokens in params using provided values.
+ * Only replace {string}, but in {{string}} the inner {string} should be replaced, leaving the outer one intact.
+ */
+function resolvePlaceholders(value, replacements) {
+  if (Array.isArray(value)) return value.map(v => resolvePlaceholders(v, replacements))
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, resolvePlaceholders(v, replacements)]))
+  }
+  if (typeof value === 'string') {
+    // Replace only single braces, not double braces
+    // For {{key}}, replace the inner {key} but keep the outer braces
+    // e.g. "{{foo}}" with {foo: "bar"} => "{bar}"
+    // e.g. "abc {foo} xyz" => "abc bar xyz"
+    // e.g. "{{foo}}" with no foo => "{foo}"
+    return value.replace(/{{([^{}]+)}}|{([^{}]+)}/g, (match, doubleKey, singleKey) => {
+      if (doubleKey !== undefined) {
+        // It's {{key}}, so replace inner {key} and keep outer braces
+        const inner = replacements[doubleKey] ?? doubleKey
+        return `{${inner}}`
+      }
+      if (singleKey !== undefined) {
+        // It's {key}, so replace as usual
+        return replacements[singleKey] ?? `{${singleKey}}`
+      }
+      return match
+    })
+  }
+  return value
 }
 
 // Remove a stage from the pipeline
@@ -480,27 +724,82 @@ function getOrCreateNestedParam(paramKey) {
 function savePipeline() {
   console.log('Saving pipeline:', stages.value)
   // TODO: Implement actual save functionality
+  
   alert('Pipeline save functionality will be implemented soon!')
 }
 
 function buildManifestFromStages() {
+  const jobSteps = []
+
+  stages.value.forEach((s) => {
+    if (isChainStage(s)) {
+      const chainDef = getChainDefinition(s.config.chainKey)
+      if (!chainDef) return
+      const inputs = s.config.userInputs || {}
+
+      // Exposures may be stored under camelCased or snake_case keys depending on parsing
+      const exposures = chainDef.stepParamExposure || chainDef.step_param_exposure || []
+
+      const setNested = (obj, path, value) => {
+        const parts = (path || '').split('.')
+        let cur = obj
+        for (let i = 0; i < parts.length; i++) {
+          const p = parts[i]
+          if (i === parts.length - 1) {
+            cur[p] = value
+          } else {
+            if (!cur[p]) cur[p] = {}
+            cur = cur[p]
+          }
+        }
+      }
+
+      ;(chainDef.chain || []).forEach((stepEntry, idx) => {
+        const stepType = stepEntry.type
+        const displayName = getStepTypeConfig(stepType)?.displayName || stepEntry.display_name || stepEntry.type || `Step ${idx + 1}`
+
+        // Collect exposures for this step instance by step id
+        const stepExposures = (exposures || []).filter(e => (e.stepId === stepEntry.id) || (e.step_id === stepEntry.id) || (e.stepId === stepEntry.step_id))
+
+        // Build params from exposures (defaults may contain placeholders)
+        const paramsObj = {}
+        stepExposures.forEach(exp => {
+          const paramPath = exp.param || exp.paramName || exp.param_name || ''
+          const resolved = resolvePlaceholders(exp.default, inputs)
+          if (paramPath) setNested(paramsObj, paramPath, resolved)
+        })
+
+        jobSteps.push({
+          step_name: displayName,
+          type: stepType,
+          command_chain_type: s.config.command_chain_type || s.config.chainKey || chainDef.command_chain_type || chainDef.chainKey,
+          chain_command_name: s.config.chain_command_name || s.config.name || chainDef.display_name || chainDef.displayName || chainDef.chainKey,
+          enabled: s.config.enabled !== false,
+          params: paramsObj,
+        })
+      })
+
+      return
+    }
+
+    const displayName = (s.config && s.config.name) || s.name || 'Unnamed step'
+    const { enabled, name, ...params } = (s.config || {})
+    jobSteps.push({
+      step_name: displayName,
+      type: s.type || guessStepType(s.name),
+      command_chain_type: s.config?.command_chain_type,
+      chain_command_name: s.config?.chain_command_name,
+      enabled: enabled !== false,
+      params: params,
+    })
+  })
+
   return {
     manifest_id: `id${new Date().toISOString().slice(0, 10)}`,
     created_by: 'ui@ri-scale',
     created_at: new Date().toISOString(),
     simulated: true,
-    job_steps: stages.value.map((s) => {
-      // map UI stage -> DPS manifest step
-      const displayName = (s.config && s.config.name) || s.name || 'Unnamed step'
-      // do not duplicate the display name inside params.name
-      const { enabled, name, ...params } = (s.config || {})
-      return {
-        step_name: displayName,
-        type: s.type || guessStepType(s.name),
-        enabled: enabled !== false,
-        params: params,
-      }
-    }),
+    job_steps: jobSteps,
   }
 }
 

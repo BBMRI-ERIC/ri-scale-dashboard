@@ -171,6 +171,7 @@ const globalNavItems = [
 const projectNavItems = [
   { title: 'Datasets', icon: 'mdi-database', to: '/datasets' },
   { title: 'Data Transfers', icon: 'mdi-swap-horizontal', to: '/transfers' },
+  { title: 'Pipeline Builder', icon: 'mdi-pipe', to: '/pipelines' },
   { title: 'HPC Jobs', icon: 'mdi-chip', to: '/computations' },
   { title: 'Compute Quotas', icon: 'mdi-server', to: '/resources' },
 ]

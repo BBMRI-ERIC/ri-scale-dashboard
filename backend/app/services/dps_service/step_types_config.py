@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 
 
-# Path to the shared config file
-_CONFIG_PATH = Path(__file__).parent.parent / 'configs' / 'step_types_config.yaml'
+# Path to the shared config file (workspace root /configs)
+_CONFIG_PATH = Path(__file__).resolve().parents[3] / 'configs' / 'step_types_config.yaml'
 
 
 def load_step_types_config() -> Dict[str, Any]:
@@ -169,6 +169,17 @@ def get_all_step_types() -> list[str]:
     """
     config = load_step_types_config()
     return list(config.get('step_types', {}).keys())
+
+
+def get_command_chains() -> Dict[str, Any]:
+    """Return all composite command chains defined in the config."""
+    config = load_step_types_config()
+    return config.get('command_chains', {})
+
+
+def get_command_chain(name: str) -> Optional[Dict[str, Any]]:
+    """Return a specific composite command chain by name."""
+    return get_command_chains().get(name)
 
 
 # Cache the config for performance (reload only when needed)
