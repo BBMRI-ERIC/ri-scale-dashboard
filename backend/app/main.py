@@ -15,6 +15,10 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import yaml
 
+from logging import Logger
+
+logger = logging.getLogger(__name__)
+
 # Ensure the DPS service modules are importable when running from the app root
 BASE_DIR = Path(__file__).resolve().parent
 DPS_SERVICE_DIR = BASE_DIR / "services" / "dps_service"

@@ -296,6 +296,129 @@ command_chains:
     display_name: "Convert to DICOM"
     description: "Runs wsidicomizer per row on a source and loads the generated DICOM directories as a new source."
     icon: "mdi-hospital-box"
+    category: "Data Conversion"
+    # Explicit sequence with step instance ids (allows duplicates and disambiguation)
+    chain:
+      - id: run_dicom
+        type: custom_command
+      - id: load_dicom
+        type: load
+
+    # Expose step parameters to the frontend with a consistent shape.
+    # `param` uses dot-notation for nested params (e.g. columns.column_name).
+    step_param_exposure:
+      - step_id: run_dicom
+        param: input_source_name
+        label: "Input Source Name"
+        visible: true
+        help_text: "Name of the source containing WSI paths to convert"
+        default: ""
+        resolve_timing: form
+
+      - step_id: run_dicom
+        param: command
+        label: "Dicomizer Command"
+        visible: false
+        help_text: "The command to run wsidicomizer. Use per-row placeholders like {wsi_path} and {slide_id}."
+        default: "wsidicomizer -i {{wsi_path}} -o {output_dir}/{slide_id} --source opentile --format jpeg --quality 100"
+        resolve_timing: runtime
+
+      - step_id: run_dicom
+        param: execution_mode
+        label: "Execution Mode"
+        visible: false
+        default: "per_row"
+        resolve_timing: form
+
+      - step_id: load_dicom
+        param: output_source_name
+        label: "Output Source Name"
+        visible: true
+        help_text: "Name for the source to register the DICOM output"
+        default: "dicom_source"
+        resolve_timing: form
+
+      - step_id: load_dicom
+        param: path
+        label: "Input Directory"
+        visible: false
+        help_text: "Directory where DICOM output is stored"
+        default: "{output_dir}"
+        resolve_timing: form
+
+      - step_id: load_dicom
+        param: mode
+        label: "Load Mode"
+        visible: false
+        default: "discovery"
+        resolve_timing: form
+
+      - step_id: load_dicom
+        param: include
+        label: "File Pattern"
+        visible: true
+        default: "*"
+        resolve_timing: form
+
+      - step_id: load_dicom
+        param: directory_mode
+        label: "Directory Mode"
+        visible: false
+        default: true
+        resolve_timing: form
+
+      - step_id: load_dicom
+        param: columns.column_name
+        label: "DICOM Path Column (Output Source)"
+        visible: true
+        default: "dicom_path"
+        resolve_timing: form
+
+      - step_id: load_dicom
+        param: columns.filename_to_columnname
+        label: "DICOM Filename to Column (Regex)"
+        visible: true
+        default: "^(?P<slide_id>.+)$"
+        resolve_timing: form
+
+    # Declared substitutions: each placeholder used in defaults must be declared here.
+    # `scope: form` means the value is provided by the user and substituted before execution.
+    # `scope: per_row` means the placeholder refers to a column in the iterated source and
+    # will be substituted at execution time for each row.
+    substitutions:
+      - name: output_dir
+        label: "Dicom Output Directory"
+        help_text: "Directory to store generated DICOM output"
+        type: string
+        scope: form
+        default: "./dicom_output"
+
+      - name: wsi_path
+        label: "WSI Path Column (Input Source)"
+        help_text: "Column name in the input source that contains WSI file paths (per-row)"
+        type: column
+        scope: per_row
+        default: ""
+        source:
+          step_id: run_dicom
+          param: input_source_name
+          column: ""
+
+      - name: slide_id
+        label: "Slide ID Column (Input Source)"
+        help_text: "Column name in the input source that contains slide identifiers (per-row)"
+        type: column
+        scope: per_row
+        default: ""
+        source:
+          step_id: run_dicom
+          param: input_source_name
+          column: ""
+  dicom_conversion2:
+    display_name: "Convert to DICOM 2"
+    description: "Runs wsidicomizer per row on a source and loads the generated DICOM directories as a new source."
+    icon: "mdi-hospital-box"
+    category: "Data Conversion (variant)"
     # Explicit sequence with step instance ids (allows duplicates and disambiguation)
     chain:
       - id: run_dicom

@@ -61,15 +61,50 @@
               <v-card-title class="text-subtitle-1">Stage Library</v-card-title>
               <v-divider />
               <v-list density="comfortable">
-                <v-list-item
-                  v-for="block in stageLibrary"
-                  :key="block.name"
-                  :title="block.name"
-                  :subtitle="block.description"
-                  :prepend-icon="block.icon"
-                  @click="addStage(block)"
-                  class="library-item"
-                />
+                <!-- Basic Steps Group -->
+                <v-list-group value="Basic">
+                  <template v-slot:activator="{ props }">
+                    <v-list-item
+                      v-bind="props"
+                      title="Basic"
+                      :prepend-icon="'mdi-toolbox'"
+                    />
+                  </template>
+                  <v-list-item
+                    v-for="block in stageLibrary.basic"
+                    :key="block.name"
+                    :title="block.name"
+                    :subtitle="block.description"
+                    :prepend-icon="block.icon"
+                    @click="addStage(block)"
+                    class="library-item"
+                  />
+                </v-list-group>
+
+                <!-- Custom Chains by Category -->
+                <v-list-group
+                  v-for="(chains, category) in stageLibrary.custom"
+                  :key="category"
+                  :value="category"
+                  v-if="Object.keys(stageLibrary.custom).length > 0"
+                >
+                  <template v-slot:activator="{ props }">
+                    <v-list-item
+                      v-bind="props"
+                      :title="category"
+                      :prepend-icon="'mdi-package-variant-closed'"
+                    />
+                  </template>
+                  <v-list-item
+                    v-for="block in chains"
+                    :key="block.name"
+                    :title="block.name"
+                    :subtitle="block.description"
+                    :prepend-icon="block.icon"
+                    @click="addStage(block)"
+                    class="library-item"
+                  />
+                </v-list-group>
               </v-list>
             </v-card>
           </v-col>
@@ -430,11 +465,26 @@ const stageLibrary = computed(() => {
       chain: chainDef.chain || [],
       userInputs,
       substitutions: chainDef.substitutions || [],
+      category: chainDef.category || 'Uncategorized',
     }
   })
 
-  return [...chainEntries, ...typeEntries]
+  // Group chains by category
+  const chainsByCategory = chainEntries.reduce((acc, chain) => {
+    const cat = chain.category
+    if (!acc[cat]) {
+      acc[cat] = []
+    }
+    acc[cat].push(chain)
+    return acc
+  }, {})
+
+  return {
+    basic: typeEntries,
+    custom: chainsByCategory,
+  }
 })
+
 
 // Pipeline stages
 const stages = ref([])
@@ -498,12 +548,18 @@ function generateId() {
 function getStageIcon(stageOrName) {
   const type = typeof stageOrName === 'object' ? stageOrName.type : undefined
   if (type) {
-    const matchByType = stageLibrary.value.find(s => s.type === type)
+    // Flatten basic stages
+    const basicStages = stageLibrary.value.basic
+    const matchByType = basicStages.find(s => s.type === type)
     if (matchByType) return matchByType.icon
   }
 
   const name = typeof stageOrName === 'object' ? stageOrName.name : stageOrName
-  const matchByName = stageLibrary.value.find(s => s.name === name)
+  // Flatten custom stages from all categories
+  const basicStages = stageLibrary.value.basic
+  const customStages = Object.values(stageLibrary.value.custom).flat()
+  const allStages = [...basicStages, ...customStages]
+  const matchByName = allStages.find(s => s.name === name)
   return matchByName ? matchByName.icon : 'mdi-cube-outline'
 }
 
@@ -511,7 +567,12 @@ function getStageIcon(stageOrName) {
 function addStage(stageDefinition) {
   const definition = (stageDefinition && typeof stageDefinition === 'object')
     ? stageDefinition
-    : stageLibrary.value.find(s => s.name === stageDefinition)
+    : (() => {
+        const basicStages = stageLibrary.value.basic
+        const customStages = Object.values(stageLibrary.value.custom).flat()
+        const allStages = [...basicStages, ...customStages]
+        return allStages.find(s => s.name === stageDefinition)
+      })()
 
   if (!definition) return
 
