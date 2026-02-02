@@ -240,7 +240,7 @@ class DataPreparationForExploitationService:
         # -----------------------------------------------------------------------------------------
         # Parse and add DPS steps and their intermediate data source results to the pipeline
         # -----------------------------------------------------------------------------------------
-            steps = manifest.get('dps_steps', manifest.get('job_steps', []))
+            steps = manifest.get('job_steps', [])
             for step in steps:
                 step_name = step.get('step_name', '')
                 step_type = step.get('type', '')
