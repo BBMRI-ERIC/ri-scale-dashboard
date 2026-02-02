@@ -16,21 +16,43 @@
           </div>
           <div class="actions">
             <v-btn 
-              color="primary" 
-              prepend-icon="mdi-plus" 
-              @click="addStage()"
-            >
-              Add Stage
-            </v-btn>
-            <v-btn 
               variant="tonal" 
               prepend-icon="mdi-content-save-outline"
-              @click="savePipeline"
+              @click="showSaveDialog"
             >
               Save Pipeline
             </v-btn>
           </div>
         </div>
+
+        <!-- Save Pipeline Dialog -->
+        <v-dialog v-model="saveDialogOpen" max-width="500px">
+          <v-card>
+            <v-card-title>Save Pipeline</v-card-title>
+            <v-divider />
+            <v-card-text class="pt-6">
+              <div class="text-subtitle-2 mb-2">Project</div>
+              <div class="text-body-2 mb-4">{{ selectedProjectName }}</div>
+
+              <v-text-field
+                v-model="pipelineName"
+                label="Pipeline Name"
+                placeholder="Enter a descriptive name for your pipeline"
+                variant="outlined"
+                density="comfortable"
+                clearable
+                @keyup.enter="confirmSavePipeline"
+              />
+              <div v-if="saveError" class="text-error text-caption mt-2 mb-4">{{ saveError }}</div>
+            </v-card-text>
+            <v-divider />
+            <v-card-actions>
+              <v-spacer />
+              <v-btn variant="plain" @click="saveDialogOpen = false">Cancel</v-btn>
+              <v-btn color="primary" :loading="isSaving" @click="confirmSavePipeline">Save</v-btn>
+            </v-card-actions>
+          </v-card>
+        </v-dialog>
 
         <v-row>
           <!-- Stage Library Panel -->
@@ -321,36 +343,18 @@
               </div>
 
               <div class="yaml-panel" v-else>
-                <div class="yaml-actions">
-                  <v-btn
-                    size="small"
-                    variant="tonal"
-                    prepend-icon="mdi-refresh"
-                    @click="resetYamlFromStages"
-                  >
-                    Reset
-                  </v-btn>
-                  <v-btn
-                    size="small"
-                    color="primary"
-                    prepend-icon="mdi-check"
-                    @click="applyYamlToStages"
-                  >
-                    Apply YAML
-                  </v-btn>
-                </div>
 
                 <v-textarea
                   v-model="yamlText"
                   label="Pipeline manifest (YAML)"
                   variant="outlined"
                   density="comfortable"
-                  rows="18"
+                  rows="20"
                   class="yaml-textarea"
                 />
 
                 <div v-if="yamlError" class="yaml-error">
-                  {{ yamlError }}
+                  <strong>Parse Error:</strong> {{ yamlError }}
                 </div>
               </div>
             </v-card>
@@ -367,7 +371,12 @@ import yaml from 'js-yaml'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import AppHeader from '@/components/layout/AppHeader.vue'
 import { STEP_TYPES_CONFIG, getStepTypeConfig } from '@/configs/step_types_config.js'
+import { useProjectsStore } from '@/stores/projects.js'
+import { useAuthStore } from '@/stores/auth.js'
+import { savePipeline } from '@/services/pipelines.js'
 
+const projectsStore = useProjectsStore()
+const authStore = useAuthStore()
 const sidebarRail = ref(false)
 const rightPanelTab = ref('details')
 
@@ -377,6 +386,17 @@ const yamlDirty = ref(false)
 const isSyncingFromStages = ref(false)
 const isSyncingFromYaml = ref(false)
 let yamlParseTimer = null
+
+// Save dialog state
+const saveDialogOpen = ref(false)
+const pipelineName = ref('')
+const saveError = ref('')
+const isSaving = ref(false)
+
+const selectedProjectName = computed(() => {
+  const project = projectsStore.selectedProject
+  return project?.title || project?.shortTitle || 'Unknown Project'
+})
 
 // Build stage library from shared config (step types + command chains)
 const stageLibrary = computed(() => {
@@ -720,12 +740,49 @@ function getOrCreateNestedParam(paramKey) {
   return selectedStage.value.config[paramKey]
 }
 
-// Save pipeline (placeholder for future implementation)
-function savePipeline() {
-  console.log('Saving pipeline:', stages.value)
-  // TODO: Implement actual save functionality
+// Dialog management for pipeline save
+function showSaveDialog() {
+  const project = projectsStore.selectedProject
+  if (!project) {
+    alert('Please select a project first')
+    return
+  }
   
-  alert('Pipeline save functionality will be implemented soon!')
+  pipelineName.value = ''
+  saveError.value = ''
+  saveDialogOpen.value = true
+}
+
+async function confirmSavePipeline() {
+  saveError.value = ''
+  
+  if (!pipelineName.value.trim()) {
+    saveError.value = 'Please enter a pipeline name'
+    return
+  }
+
+  const project = projectsStore.selectedProject
+  if (!project) {
+    saveError.value = 'No project selected'
+    return
+  }
+
+  isSaving.value = true
+  try {
+    const manifest = buildManifestFromStages()
+    const result = await savePipeline(project.id, pipelineName.value.trim(), manifest)
+    
+    console.log('Pipeline saved:', result)
+    saveDialogOpen.value = false
+    
+    // Show success message
+    alert(`Pipeline "${pipelineName.value}" saved successfully!`)
+  } catch (err) {
+    console.error('Error saving pipeline:', err)
+    saveError.value = err.message || 'Failed to save pipeline'
+  } finally {
+    isSaving.value = false
+  }
 }
 
 function buildManifestFromStages() {
@@ -796,7 +853,7 @@ function buildManifestFromStages() {
 
   return {
     manifest_id: `id${new Date().toISOString().slice(0, 10)}`,
-    created_by: 'ui@ri-scale',
+    created_by: authStore.userName || authStore.user?.name || 'unknown',
     created_at: new Date().toISOString(),
     simulated: true,
     job_steps: jobSteps,
@@ -833,26 +890,125 @@ function applyYamlToStages({ preserveSelection = false } = {}) {
       throw new Error('Missing required field: job_steps (must be a list).')
     }
 
-    const newStages = parsed.job_steps.map((step) => {
-      const id = generateId()
-      const stepName = step.step_name || step.name || 'Unnamed step'
-      const allParams = step.params && typeof step.params === 'object' ? step.params : {}
-      // remove any legacy name field from params; step_name is the canonical display name
-      const { name: _ignoredName, ...params } = allParams
-      return {
-        id,
-        name: stepName,
-        type: step.type || guessStepType(stepName),
-        config: {
-          ...params,
-          enabled: step.enabled !== false,
-          // display name always mirrors step_name
-          name: stepName,
-          description: params.description || '',
-          notes: params.notes || '',
-        },
+    // Group steps by command_chain_type/chain_command_name to detect composite chains
+    const groupedSteps = []
+    let currentGroup = null
+
+    parsed.job_steps.forEach((step) => {
+      const chainType = step.command_chain_type
+      const chainName = step.chain_command_name
+
+      if (chainType && chainName) {
+        // This step is part of a chain
+        if (!currentGroup || currentGroup.chainType !== chainType || currentGroup.chainName !== chainName) {
+          // Start a new chain group
+          if (currentGroup) {
+            groupedSteps.push(currentGroup)
+          }
+          currentGroup = { chainType, chainName, steps: [step] }
+        } else {
+          // Add to current chain group
+          currentGroup.steps.push(step)
+        }
+      } else {
+        // Regular step, not part of a chain
+        if (currentGroup) {
+          groupedSteps.push(currentGroup)
+          currentGroup = null
+        }
+        groupedSteps.push({ steps: [step] })
       }
     })
+    if (currentGroup) {
+      groupedSteps.push(currentGroup)
+    }
+
+    // Convert grouped steps into stages
+    const newStages = groupedSteps.map((group) => {
+      if (group.chainType) {
+        // This is a composite chain stage
+        const id = generateId()
+        const chainKey = group.chainType
+        const chainDef = getChainDefinition(chainKey)
+
+        // Extract substitution values from step params by reverse-mapping step_param_exposure
+        const userInputs = {}
+        const exposures = chainDef?.step_param_exposure || chainDef?.stepParamExposure || []
+
+        // Build a map of stepId.param -> exposure for quick lookup
+        const exposureMap = {}
+        exposures.forEach(e => {
+          const stepId = e.step_id || e.stepId
+          const param = e.param || e.paramName || e.param_name || ''
+          exposureMap[`${stepId}.${param}`] = e
+        })
+
+        // Extract param values from steps and map back to substitution names
+        const getNested = (obj, path) => {
+          const parts = (path || '').split('.')
+          let cur = obj
+          for (const p of parts) {
+            if (!cur || typeof cur !== 'object') return undefined
+            cur = cur[p]
+          }
+          return cur
+        }
+
+        group.steps.forEach((step, stepIdx) => {
+          const stepId = `run_dicom` // TODO: make this dynamic based on chain def or step id in group
+          const params = step.params || {}
+          for (const [paramPath, value] of Object.entries(params)) {
+            const key = `${stepId}.${paramPath}`
+            const exp = exposureMap[key]
+            if (exp) {
+              const substName = exp.label || paramPath
+              userInputs[substName] = value
+            }
+          }
+        })
+
+        // Also preserve direct substitution values
+        ;(chainDef?.substitutions || []).forEach(s => {
+          if (!userInputs.hasOwnProperty(s.name)) {
+            userInputs[s.name] = s.default ?? ''
+          }
+        })
+
+        return {
+          id,
+          name: group.chainName,
+          type: 'command_chain',
+          config: {
+            name: group.chainName,
+            enabled: true,
+            command_chain_type: chainKey,
+            chain_command_name: group.chainName,
+            chainKey,
+            userInputs,
+          },
+        }
+      } else {
+        // Regular step
+        const step = group.steps[0]
+        const id = generateId()
+        const stepName = step.step_name || step.name || 'Unnamed step'
+        const allParams = step.params && typeof step.params === 'object' ? step.params : {}
+        const { name: _ignoredName, ...params } = allParams
+        return {
+          id,
+          name: stepName,
+          type: step.type || guessStepType(stepName),
+          config: {
+            ...params,
+            enabled: step.enabled !== false,
+            name: stepName,
+            description: params.description || '',
+            notes: params.notes || '',
+          },
+        }
+      }
+    })
+
 
     // avoid feedback loop: YAML -> stages should not immediately regenerate YAML while user is editing
     isSyncingFromYaml.value = true
@@ -879,9 +1035,9 @@ function applyYamlToStages({ preserveSelection = false } = {}) {
 watch(
   stages,
   () => {
-    // Keep YAML preview in sync unless user is actively editing it or YAML is the source of truth.
+    // Always keep YAML in sync with canvas changes, unless we are currently syncing FROM YAML to avoid feedback loops
     if (isSyncingFromYaml.value) return
-    if (!yamlDirty.value && rightPanelTab.value !== 'yaml') resetYamlFromStages()
+    resetYamlFromStages()
   },
   { deep: true, immediate: true }
 )
