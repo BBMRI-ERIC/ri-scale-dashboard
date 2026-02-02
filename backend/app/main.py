@@ -170,6 +170,116 @@ async def save_pipeline(payload: dict = Body(...)) -> JSONResponse:
         raise HTTPException(status_code=500, detail=f"Failed to save pipeline: {str(exc)}") from exc
 
 
+@app.get("/pipeline/list")
+async def list_pipelines(project_id: str) -> JSONResponse:
+    """List all saved pipelines for a project."""
+    try:
+        if not project_id or not isinstance(project_id, str):
+            raise HTTPException(status_code=400, detail="project_id is required and must be a string")
+
+        project_manifest_dir = get_project_manifest_dir(project_id)
+        
+        pipelines = []
+        if project_manifest_dir.exists():
+            for yaml_file in sorted(project_manifest_dir.glob("*.yaml"), reverse=True):
+                # Extract pipeline name from filename (remove UUID suffix)
+                filename = yaml_file.stem
+                # Find the last underscore to split name and UUID
+                parts = filename.rsplit('_', 1)
+                name = parts[0] if len(parts) > 1 else filename
+                
+                pipelines.append({
+                    "id": yaml_file.name,
+                    "name": name,
+                    "path": str(yaml_file),
+                    "created_at": yaml_file.stat().st_mtime
+                })
+        
+        logger.info(f"Listed {len(pipelines)} pipelines for project {project_id}")
+        return JSONResponse({
+            "status": "success",
+            "project_id": project_id,
+            "pipelines": pipelines
+        })
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Error listing pipelines")
+        raise HTTPException(status_code=500, detail=f"Failed to list pipelines: {str(exc)}") from exc
+
+
+@app.get("/pipeline/load")
+async def load_pipeline(project_id: str, pipeline_id: str) -> JSONResponse:
+    """Load a saved pipeline manifest."""
+    try:
+        if not project_id or not isinstance(project_id, str):
+            raise HTTPException(status_code=400, detail="project_id is required and must be a string")
+        if not pipeline_id or not isinstance(pipeline_id, str):
+            raise HTTPException(status_code=400, detail="pipeline_id is required and must be a string")
+
+        project_manifest_dir = get_project_manifest_dir(project_id)
+        pipeline_path = project_manifest_dir / pipeline_id
+
+        if not pipeline_path.exists():
+            raise HTTPException(status_code=404, detail=f"Pipeline {pipeline_id} not found")
+
+        with pipeline_path.open("r", encoding="utf-8") as fh:
+            manifest = yaml.safe_load(fh)
+
+        logger.info(f"Loaded pipeline {pipeline_id} for project {project_id}")
+        return JSONResponse({
+            "status": "success",
+            "project_id": project_id,
+            "pipeline_id": pipeline_id,
+            "manifest": manifest
+        })
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Error loading pipeline")
+        raise HTTPException(status_code=500, detail=f"Failed to load pipeline: {str(exc)}") from exc
+
+
+@app.put("/pipeline/save")
+async def update_pipeline(payload: dict = Body(...)) -> JSONResponse:
+    """Update an existing pipeline manifest."""
+    try:
+        project_id = payload.get('project_id')
+        pipeline_id = payload.get('pipeline_id')
+        manifest = payload.get('manifest')
+        
+        logger.info(f"Update pipeline request: project_id={project_id}, pipeline_id={pipeline_id}")
+        
+        if not project_id or not isinstance(project_id, str):
+            raise HTTPException(status_code=400, detail="project_id is required and must be a string")
+        if not pipeline_id or not isinstance(pipeline_id, str):
+            raise HTTPException(status_code=400, detail="pipeline_id is required and must be a string")
+        if not isinstance(manifest, dict):
+            raise HTTPException(status_code=400, detail="manifest must be an object")
+
+        project_manifest_dir = get_project_manifest_dir(project_id)
+        pipeline_path = project_manifest_dir / pipeline_id
+
+        if not pipeline_path.exists():
+            raise HTTPException(status_code=404, detail=f"Pipeline {pipeline_id} not found")
+
+        with pipeline_path.open("w", encoding="utf-8") as fh:
+            yaml.safe_dump(manifest, fh, sort_keys=False, allow_unicode=False)
+
+        logger.info("Pipeline updated at %s", pipeline_path)
+        return JSONResponse({
+            "status": "success",
+            "pipeline_path": str(pipeline_path),
+            "project_id": project_id,
+            "pipeline_id": pipeline_id
+        })
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Error updating pipeline")
+        raise HTTPException(status_code=500, detail=f"Failed to update pipeline: {str(exc)}") from exc
+
+
 if __name__ == "__main__":
     import uvicorn
 

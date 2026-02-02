@@ -1,0 +1,58 @@
+manifest_id: id2026-02-02
+created_by: Test User
+created_at: '2026-02-02T12:26:51.798Z'
+simulated: true
+job_steps:
+- step_name: Data Loader
+  type: load
+  enabled: true
+  params:
+    outputSourceName: source1
+    mode: discovery
+    path: ./data
+    include: '*'
+    recursive: false
+    directoryMode: false
+    columns:
+      columnName: file_path
+      filenameToColumnname: ^(?P<slide_id>.+?)$
+      header: true
+      delimiter: ','
+    fileType: default
+    description: ''
+    notes: ''
+- step_name: Run Command
+  type: custom_command
+  command_chain_type: dicomConversion
+  chain_command_name: Convert to DICOM
+  enabled: true
+  params:
+    input_source_name: ''
+    command: wsidicomizer -i {} -o ./dicom_output/ --source opentile --format jpeg
+      --quality 100
+    execution_mode: per_row
+- step_name: Data Loader
+  type: load
+  command_chain_type: dicomConversion
+  chain_command_name: Convert to DICOM
+  enabled: true
+  params:
+    output_source_name: dicom_source
+    path: ./dicom_output
+    mode: discovery
+    include: '*'
+    directory_mode: true
+    columns:
+      column_name: dicom_path
+      filename_to_columnname: ^(?P<slide_id>.+)$
+- step_name: Join
+  type: join
+  enabled: true
+  params:
+    leftSourceName: null
+    rightSourceName: null
+    outputSourceName: null
+    leftKey: slide_id
+    rightKey: slide_id
+    joinType: inner
+    missingPolicy: drop

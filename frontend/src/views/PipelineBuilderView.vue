@@ -17,6 +17,13 @@
           <div class="actions">
             <v-btn 
               variant="tonal" 
+              prepend-icon="mdi-folder-open-outline"
+              @click="showLoadDialog"
+            >
+              Load Pipeline
+            </v-btn>
+            <v-btn 
+              variant="tonal" 
               prepend-icon="mdi-content-save-outline"
               @click="showSaveDialog"
             >
@@ -25,8 +32,44 @@
           </div>
         </div>
 
+        <!-- Load Pipeline Dialog -->
+        <v-dialog v-model="loadDialogOpen" max-width="500px">
+          <v-card>
+            <v-card-title>Load Pipeline</v-card-title>
+            <v-divider />
+            <v-card-text class="pt-6">
+              <div class="text-subtitle-2 mb-2">Project</div>
+              <div class="text-body-2 mb-4">{{ selectedProjectName }}</div>
+
+              <div v-if="isLoadingPipelines" class="text-center py-4">
+                <v-progress-circular indeterminate color="primary" />
+              </div>
+              <div v-else-if="savedPipelines.length === 0" class="text-center py-4 text-body-2">
+                No saved pipelines found for this project
+              </div>
+              <v-list v-else density="comfortable" class="bg-transparent">
+                <v-list-item
+                  v-for="pipeline in savedPipelines"
+                  :key="pipeline.id"
+                  :title="pipeline.name"
+                  :subtitle="`Saved ${new Date(pipeline.created_at * 1000).toLocaleDateString()}`"
+                  @click="loadSelectedPipeline(pipeline.id)"
+                  class="cursor-pointer"
+                  style="border: 1px solid var(--v-border-color); border-radius: 4px; margin-bottom: 8px;"
+                />
+              </v-list>
+              <div v-if="loadError" class="text-error text-caption mt-2 mb-4">{{ loadError }}</div>
+            </v-card-text>
+            <v-divider />
+            <v-card-actions>
+              <v-spacer />
+              <v-btn variant="plain" @click="loadDialogOpen = false">Cancel</v-btn>
+            </v-card-actions>
+          </v-card>
+        </v-dialog>
+
         <!-- Save Pipeline Dialog -->
-        <v-dialog v-model="saveDialogOpen" max-width="500px">
+        <v-dialog v-model="saveDialogOpen" max-width="600px">
           <v-card>
             <v-card-title>Save Pipeline</v-card-title>
             <v-divider />
@@ -43,13 +86,52 @@
                 clearable
                 @keyup.enter="confirmSavePipeline"
               />
-              <div v-if="saveError" class="text-error text-caption mt-2 mb-4">{{ saveError }}</div>
+              
+              <div class="text-subtitle-2 mt-6 mb-2">Existing Pipelines</div>
+              <div v-if="isSavingDialogLoading" class="text-center py-4">
+                <v-progress-circular indeterminate color="primary" size="24" />
+              </div>
+              <div v-else-if="savedPipelinesForSave.length === 0" class="text-body-2 text-medium-emphasis py-4">
+                No existing pipelines in this project
+              </div>
+              <v-list v-else density="comfortable" class="bg-transparent" style="max-height: 250px; overflow-y: auto;">
+                <v-list-item
+                  v-for="pipeline in savedPipelinesForSave"
+                  :key="pipeline.id"
+                  :title="pipeline.name"
+                  :subtitle="`Saved ${new Date(pipeline.created_at * 1000).toLocaleDateString()}`"
+                  @click="selectExistingPipeline(pipeline.name)"
+                  class="cursor-pointer"
+                  :active="pipelineName === pipeline.name"
+                  style="border-radius: 4px;"
+                />
+              </v-list>
+              
+              <div v-if="saveError" class="text-error text-caption mt-4 mb-4">{{ saveError }}</div>
             </v-card-text>
             <v-divider />
             <v-card-actions>
               <v-spacer />
               <v-btn variant="plain" @click="saveDialogOpen = false">Cancel</v-btn>
               <v-btn color="primary" :loading="isSaving" @click="confirmSavePipeline">Save</v-btn>
+            </v-card-actions>
+          </v-card>
+        </v-dialog>
+
+        <!-- Overwrite Pipeline Dialog -->
+        <v-dialog v-model="overwriteDialogOpen" max-width="400px">
+          <v-card>
+            <v-card-title>Pipeline Already Exists</v-card-title>
+            <v-divider />
+            <v-card-text class="pt-6">
+              <p>A pipeline named "<strong>{{ pipelineName }}</strong>" already exists.</p>
+              <p class="mt-4">Do you want to overwrite it?</p>
+            </v-card-text>
+            <v-divider />
+            <v-card-actions>
+              <v-spacer />
+              <v-btn variant="plain" @click="overwriteDialogOpen = false">Cancel</v-btn>
+              <v-btn color="warning" :loading="isSaving" @click="performSavePipeline(true)">Overwrite</v-btn>
             </v-card-actions>
           </v-card>
         </v-dialog>
@@ -408,7 +490,7 @@ import AppHeader from '@/components/layout/AppHeader.vue'
 import { STEP_TYPES_CONFIG, getStepTypeConfig } from '@/configs/step_types_config.js'
 import { useProjectsStore } from '@/stores/projects.js'
 import { useAuthStore } from '@/stores/auth.js'
-import { savePipeline } from '@/services/pipelines.js'
+import { savePipeline, listPipelines, loadPipeline, updatePipeline } from '@/services/pipelines.js'
 
 const projectsStore = useProjectsStore()
 const authStore = useAuthStore()
@@ -427,6 +509,18 @@ const saveDialogOpen = ref(false)
 const pipelineName = ref('')
 const saveError = ref('')
 const isSaving = ref(false)
+const savedPipelinesForSave = ref([])
+const isSavingDialogLoading = ref(false)
+
+// Load dialog state
+const loadDialogOpen = ref(false)
+const savedPipelines = ref([])
+const isLoadingPipelines = ref(false)
+const loadError = ref('')
+
+// Overwrite dialog state
+const overwriteDialogOpen = ref(false)
+const existingPipelineId = ref(null)
 
 const selectedProjectName = computed(() => {
   const project = projectsStore.selectedProject
@@ -811,7 +905,25 @@ function showSaveDialog() {
   
   pipelineName.value = ''
   saveError.value = ''
+  isSavingDialogLoading.value = true
   saveDialogOpen.value = true
+
+  // Load existing pipelines for the save dialog
+  listPipelines(project.id)
+    .then(result => {
+      savedPipelinesForSave.value = result.pipelines || []
+    })
+    .catch(err => {
+      console.error('Error listing pipelines:', err)
+      savedPipelinesForSave.value = []
+    })
+    .finally(() => {
+      isSavingDialogLoading.value = false
+    })
+}
+
+function selectExistingPipeline(pipelineNameToSelect) {
+  pipelineName.value = pipelineNameToSelect
 }
 
 async function confirmSavePipeline() {
@@ -830,19 +942,106 @@ async function confirmSavePipeline() {
 
   isSaving.value = true
   try {
+    // Check if a pipeline with this name already exists
+    const result = await listPipelines(project.id)
+    const existingPipeline = result.pipelines?.find(p => p.name === pipelineName.value.trim())
+    
+    if (existingPipeline) {
+      // Ask user if they want to overwrite
+      existingPipelineId.value = existingPipeline.id
+      overwriteDialogOpen.value = true
+      isSaving.value = false
+      return
+    }
+
+    // No existing pipeline, proceed with save
+    await performSavePipeline(false)
+  } catch (err) {
+    console.error('Error checking for existing pipeline:', err)
+    saveError.value = err.message || 'Failed to check existing pipelines'
+    isSaving.value = false
+  }
+}
+
+async function performSavePipeline(isOverwrite = false) {
+  isSaving.value = true
+  try {
     const manifest = buildManifestFromStages()
-    const result = await savePipeline(project.id, pipelineName.value.trim(), manifest)
+    const project = projectsStore.selectedProject
+    
+    let result
+    if (isOverwrite && existingPipelineId.value) {
+      // Update existing pipeline
+      result = await updatePipeline(project.id, existingPipelineId.value, manifest)
+    } else {
+      // Save as new pipeline
+      result = await savePipeline(project.id, pipelineName.value.trim(), manifest)
+    }
     
     console.log('Pipeline saved:', result)
     saveDialogOpen.value = false
+    overwriteDialogOpen.value = false
     
     // Show success message
-    alert(`Pipeline "${pipelineName.value}" saved successfully!`)
+    alert(`Pipeline "${pipelineName.value}" ${isOverwrite ? 'updated' : 'saved'} successfully!`)
   } catch (err) {
     console.error('Error saving pipeline:', err)
     saveError.value = err.message || 'Failed to save pipeline'
   } finally {
     isSaving.value = false
+  }
+}
+
+async function showLoadDialog() {
+  const project = projectsStore.selectedProject
+  if (!project) {
+    alert('Please select a project first')
+    return
+  }
+
+  loadError.value = ''
+  isLoadingPipelines.value = true
+  loadDialogOpen.value = true
+
+  try {
+    const result = await listPipelines(project.id)
+    savedPipelines.value = result.pipelines || []
+  } catch (err) {
+    console.error('Error listing pipelines:', err)
+    loadError.value = err.message || 'Failed to load pipelines'
+  } finally {
+    isLoadingPipelines.value = false
+  }
+}
+
+async function loadSelectedPipeline(pipelineId) {
+  const project = projectsStore.selectedProject
+  if (!project) {
+    loadError.value = 'No project selected'
+    return
+  }
+
+  try {
+    const result = await loadPipeline(project.id, pipelineId)
+    const manifest = result.manifest
+
+    // Clear current stages
+    stages.value = []
+    selectedStageId.value = null
+
+    // Convert manifest to YAML and set it, then apply to stages
+    yamlText.value = yaml.dump(manifest)
+    
+    // Reset sync flags and apply YAML to stages
+    isSyncingFromYaml.value = true
+    applyYamlToStages({ preserveSelection: false })
+    isSyncingFromYaml.value = false
+
+    loadDialogOpen.value = false
+    alert('Pipeline loaded successfully!')
+  } catch (err) {
+    console.error('Error loading pipeline:', err)
+    loadError.value = err.message || 'Failed to load pipeline'
   }
 }
 
