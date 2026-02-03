@@ -6,7 +6,39 @@
 version: "1.0"
 description: "DPS Step Types Configuration - used by both backend and frontend"
 
-# Step type definitions
+# Field Enum-like Registry:
+# Allows fields to register their values by ID for use in dropdown lists in other fields
+  # Fields can declare register_id to store their value in the registry
+  # Fields can declare use_registry_source to populate dropdown from registered values
+  
+  # Usage Examples:
+  # 1. Register a field value:
+  #    output_source_name:
+  #      type: "string"
+  #      register_id: "sources"  # This value will be added to the "sources" list
+  #      label: "Output Source Name"
+  #
+  # 2. Use registered values as dropdown options:
+  #    input_source_name:
+  #      type: "enum"
+  #      use_registry_source: "sources"  # Populate dropdown from registered "sources"
+  #      label: "Input Source"
+  #
+  # How it works:
+  # - When a user enters a value in a field with register_id, that value is automatically
+  #   added to a list identified by that registry ID (only added once, duplicates ignored)
+  # - Fields with use_registry_source can reference this registry by ID to populate their
+  #   dropdown options with all previously registered values from that ID
+  # - This creates a dynamic relationship where user inputs in one step can automatically
+  #   become available as choices in downstream steps
+  #
+  # Use Cases:
+  # - Allow users to name data sources in a Load step, then automatically offer those
+  #   names as input options in Join or Custom Command steps
+  # - Create dynamic dropdowns that adapt based on previous user inputs
+  # - Eliminate manual typing of source names and reduce errors
+
+# Step type definitions:
 step_types:
   # Load Step: Imports data from files or CSV into named sources
   load:
@@ -23,6 +55,7 @@ step_types:
         type: "string"
         required: true
         default: "source1"
+        register_id: "sources"
         help_text: "Name to register this data source (e.g., 'wsi_source', 'labels')"
         validation:
           pattern: "^[a-zA-Z_][a-zA-Z0-9_]*$"
@@ -180,9 +213,10 @@ step_types:
 
       input_source_name:
         label: "Input Source"
-        type: "string"
+        type: "enum"
         required_when: "execution_mode == 'per_row'"
         default: "source1"
+        use_registry_source: "sources"
         help_text: "Name of the source to iterate over (required for per-row mode)"
         validation:
           error_message: "Must reference an existing source"
@@ -198,18 +232,20 @@ step_types:
     params:
       left_source_name:
         label: "Left Source"
-        type: "string"
+        type: "enum"
         required: true
         default: null
+        use_registry_source: "sources"
         help_text: "Name of the left data source to join"
         validation:
           error_message: "Must reference an existing source"
 
       right_source_name:
         label: "Right Source"
-        type: "string"
+        type: "enum"
         required: true
         default: null
+        use_registry_source: "sources"
         help_text: "Name of the right data source to join"
         validation:
           error_message: "Must reference an existing source"
@@ -219,6 +255,7 @@ step_types:
         type: "string"
         required: true
         default: null
+        register_id: "sources"
         help_text: "Name to register the joined result"
         validation:
           pattern: "^[a-zA-Z_][a-zA-Z0-9_]*$"
@@ -310,9 +347,10 @@ command_chains:
       - step_id: run_dicom
         param: input_source_name
         label: "Input Source Name"
+        use_registry_source: "sources"
         visible: true
         help_text: "Name of the source containing WSI paths to convert"
-        default: ""
+        default: "source1"
         resolve_timing: form
 
       - step_id: run_dicom
@@ -320,7 +358,7 @@ command_chains:
         label: "Dicomizer Command"
         visible: false
         help_text: "The command to run wsidicomizer. Use per-row placeholders like {wsi_path} and {slide_id}."
-        default: "wsidicomizer -i {{wsi_path}} -o {output_dir}/{slide_id} --source opentile --format jpeg --quality 100"
+        default: "wsidicomizer -i {{wsi_path}} -o {output_dir}/{{slide_id}} --source opentile --format jpeg --quality 100"
         resolve_timing: runtime
 
       - step_id: run_dicom
@@ -333,128 +371,7 @@ command_chains:
       - step_id: load_dicom
         param: output_source_name
         label: "Output Source Name"
-        visible: true
-        help_text: "Name for the source to register the DICOM output"
-        default: "dicom_source"
-        resolve_timing: form
-
-      - step_id: load_dicom
-        param: path
-        label: "Input Directory"
-        visible: false
-        help_text: "Directory where DICOM output is stored"
-        default: "{output_dir}"
-        resolve_timing: form
-
-      - step_id: load_dicom
-        param: mode
-        label: "Load Mode"
-        visible: false
-        default: "discovery"
-        resolve_timing: form
-
-      - step_id: load_dicom
-        param: include
-        label: "File Pattern"
-        visible: true
-        default: "*"
-        resolve_timing: form
-
-      - step_id: load_dicom
-        param: directory_mode
-        label: "Directory Mode"
-        visible: false
-        default: true
-        resolve_timing: form
-
-      - step_id: load_dicom
-        param: columns.column_name
-        label: "DICOM Path Column (Output Source)"
-        visible: true
-        default: "dicom_path"
-        resolve_timing: form
-
-      - step_id: load_dicom
-        param: columns.filename_to_columnname
-        label: "DICOM Filename to Column (Regex)"
-        visible: true
-        default: "^(?P<slide_id>.+)$"
-        resolve_timing: form
-
-    # Declared substitutions: each placeholder used in defaults must be declared here.
-    # `scope: form` means the value is provided by the user and substituted before execution.
-    # `scope: per_row` means the placeholder refers to a column in the iterated source and
-    # will be substituted at execution time for each row.
-    substitutions:
-      - name: output_dir
-        label: "Dicom Output Directory"
-        help_text: "Directory to store generated DICOM output"
-        type: string
-        scope: form
-        default: "./dicom_output"
-
-      - name: wsi_path
-        label: "WSI Path Column (Input Source)"
-        help_text: "Column name in the input source that contains WSI file paths (per-row)"
-        type: column
-        scope: per_row
-        default: ""
-        source:
-          step_id: run_dicom
-          param: input_source_name
-          column: ""
-
-      - name: slide_id
-        label: "Slide ID Column (Input Source)"
-        help_text: "Column name in the input source that contains slide identifiers (per-row)"
-        type: column
-        scope: per_row
-        default: ""
-        source:
-          step_id: run_dicom
-          param: input_source_name
-          column: ""
-  dicom_conversion2:
-    display_name: "Convert to DICOM 2"
-    description: "Runs wsidicomizer per row on a source and loads the generated DICOM directories as a new source."
-    icon: "mdi-hospital-box"
-    category: "Data Conversion (variant)"
-    # Explicit sequence with step instance ids (allows duplicates and disambiguation)
-    chain:
-      - id: run_dicom
-        type: custom_command
-      - id: load_dicom
-        type: load
-
-    # Expose step parameters to the frontend with a consistent shape.
-    # `param` uses dot-notation for nested params (e.g. columns.column_name).
-    step_param_exposure:
-      - step_id: run_dicom
-        param: input_source_name
-        label: "Input Source Name"
-        visible: true
-        help_text: "Name of the source containing WSI paths to convert"
-        default: ""
-        resolve_timing: form
-
-      - step_id: run_dicom
-        param: command
-        label: "Dicomizer Command"
-        visible: false
-        help_text: "The command to run wsidicomizer. Use per-row placeholders like {wsi_path} and {slide_id}."
-        default: "wsidicomizer -i {{wsi_path}} -o {output_dir}/{slide_id} --source opentile --format jpeg --quality 100"
-        resolve_timing: runtime
-
-      - step_id: run_dicom
-        param: execution_mode
-        label: "Execution Mode"
-        visible: false
-        default: "per_row"
-        resolve_timing: form
-
-      - step_id: load_dicom
-        param: output_source_name
-        label: "Output Source Name"
+        register_id: "sources"
         visible: true
         help_text: "Name for the source to register the DICOM output"
         default: "dicom_source"

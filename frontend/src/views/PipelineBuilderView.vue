@@ -314,7 +314,22 @@
                     <div class="text-subtitle-2 mb-2" style="margin-left: 12px;">Inputs</div>
                     <div class="text-caption text-medium-emphasis mb-3" style="margin-left: 12px;">Values are substituted into the chain steps.</div>
                     <template v-for="sub in selectedChainFormInputs || []" :key="sub.name">
+                      <!-- Use registry source as dropdown if specified -->
+                      <v-select
+                        v-if="sub.use_registry_source"
+                        v-model="selectedStage.config.userInputs[sub.name]"
+                        :label="sub.label || sub.name"
+                        :placeholder="sub.default || ''"
+                        :hint="sub.helpText"
+                        :items="getRegisteredValues(sub.use_registry_source)"
+                        variant="outlined"
+                        density="compact"
+                        class="mb-3"
+                        style="margin-left: 12px;"
+                      />
+                      <!-- Regular text input for non-registry fields -->
                       <v-text-field
+                        v-else
                         v-model="selectedStage.config.userInputs[sub.name]"
                         :label="sub.label || sub.name"
                         :placeholder="sub.default || ''"
@@ -395,7 +410,7 @@
                             v-model="selectedStage.config[paramKey]"
                             :label="paramConfig.label"
                             :hint="paramConfig.helpText"
-                            :items="paramConfig.enumValues"
+                            :items="getEnumItemsForField(paramConfig)"
                             item-title="label"
                             item-value="value"
                             :required="isParamRequiredForStage(paramKey, paramConfig)"
@@ -583,6 +598,33 @@ const stageLibrary = computed(() => {
 // Pipeline stages
 const stages = ref([])
 
+// Field Registry: Maps registry IDs to arrays of registered values
+// e.g., { "sources": ["source1", "wsi_source", "labels"] }
+// Fields with register_id add their values here, fields with use_registry_source read from here
+const fieldRegistry = ref({})
+
+// Helper to add a value to the registry
+function registerFieldValue(registryId, value) {
+  if (!registryId || !value) return
+  if (!fieldRegistry.value[registryId]) {
+    fieldRegistry.value[registryId] = []
+  }
+  // Add value if not already present (avoid duplicates)
+  if (!fieldRegistry.value[registryId].includes(value)) {
+    fieldRegistry.value[registryId].push(value)
+  }
+}
+
+// Helper to get registered values for a registry ID
+function getRegisteredValues(registryId) {
+  return fieldRegistry.value[registryId] || []
+}
+
+// Helper to clear the registry (useful when loading a new pipeline)
+function clearRegistry() {
+  fieldRegistry.value = {}
+}
+
 // Selected stage for configuration
 const selectedStageId = ref(null)
 const selectedStage = computed(() => {
@@ -621,7 +663,16 @@ const selectedChainExposures = computed(() => {
       const stepId = e.step_id || 'step'
       const param = e.param || e.param_name || 'param'
       const name = `${stepId}.${param.replace(/\./g, '_')}`
-      return { name, label: e.label || `${stepId} ${param}`, default: e.default, helpText: e.help_text, stepId, param }
+      return { 
+        name, 
+        label: e.label || `${stepId} ${param}`, 
+        default: e.default, 
+        helpText: e.help_text, 
+        stepId, 
+        param,
+        use_registry_source: e.use_registry_source,
+        register_id: e.register_id
+      }
     })
 })
 
@@ -839,6 +890,22 @@ function moveStage(index, delta) {
   stages.value = newStages
 }
 
+// Helper: Get enum items for a field, considering registry sources
+function getEnumItemsForField(paramConfig) {
+  // If this field uses a registry source, build items from registered values
+  if (paramConfig.use_registry_source) {
+    const registryId = paramConfig.use_registry_source
+    const registeredValues = getRegisteredValues(registryId)
+    return registeredValues.map(value => ({
+      value: value,
+      label: value
+    }))
+  }
+  
+  // Otherwise use predefined enum values
+  return paramConfig.enumValues || []
+}
+
 // Helper: Check if a parameter should be shown based on conditional logic
 function shouldShowParam(paramKey, paramConfig) {
   if (!paramConfig.conditionalOn) return true
@@ -1029,9 +1096,10 @@ async function loadSelectedPipeline(pipelineId) {
     const result = await loadPipeline(project.id, pipelineId)
     const manifest = result.manifest
 
-    // Clear current stages
+    // Clear current stages and registry
     stages.value = []
     selectedStageId.value = null
+    clearRegistry()
 
     // Convert manifest to YAML and set it, then apply to stages
     yamlText.value = yaml.dump(manifest)
@@ -1433,6 +1501,73 @@ watch(
     selectedStage.value.name = newName
   }
 )
+
+// Watch for changes to stages and update registry for fields with register_id
+watch(
+  stages,
+  () => {
+    // Rebuild registry from all current stages
+    // This ensures registry stays in sync whenever stages change
+    rebuildRegistryFromStages()
+  },
+  { deep: true, immediate: false }
+)
+
+// Helper: Rebuild the registry from all stages
+function rebuildRegistryFromStages() {
+  const newRegistry = {}
+  
+  stages.value.forEach((stage) => {
+    if (isChainStage(stage)) {
+      // For chain stages, check step parameter exposures
+      const chainDef = getChainDefinition(stage.config.chainKey)
+      if (chainDef && chainDef.step_param_exposure) {
+        chainDef.step_param_exposure.forEach((exposure) => {
+          if (exposure.register_id) {
+            const registryId = exposure.register_id
+            // For exposures, use the computed key format
+            const stepId = exposure.step_id
+            const param = exposure.param || exposure.param_name || ''
+            const expKey = `${stepId}.${param.replace(/\./g, '_')}`
+            const value = stage.config.userInputs?.[expKey]
+            
+            if (value) {
+              if (!newRegistry[registryId]) {
+                newRegistry[registryId] = []
+              }
+              if (!newRegistry[registryId].includes(value)) {
+                newRegistry[registryId].push(value)
+              }
+            }
+          }
+        })
+      }
+    } else {
+      // For regular stages, check params
+      const typeConfig = getStepTypeConfig(stage.type)
+      if (!typeConfig || !typeConfig.params) return
+      
+      // Check all parameters in this step's config for register_id
+      Object.entries(typeConfig.params).forEach(([paramKey, paramConfig]) => {
+        if (paramConfig.register_id) {
+          const registryId = paramConfig.register_id
+          const value = stage.config[paramKey]
+          
+          if (value) {
+            if (!newRegistry[registryId]) {
+              newRegistry[registryId] = []
+            }
+            if (!newRegistry[registryId].includes(value)) {
+              newRegistry[registryId].push(value)
+            }
+          }
+        }
+      })
+    }
+  })
+  
+  fieldRegistry.value = newRegistry
+}
 </script>
 
 <style scoped lang="scss">
