@@ -161,8 +161,8 @@ class DataPreparationForExploitationService:
         if mode is None:
             logger.error("mode (file/discovery) not set")
             error = True
-        if path is None:
-            logger.error("path not set")
+        if path is None:# or os.path.exists(path) == False:
+            logger.error("path not set or does not exist: %s", os.path.abspath(path) if path else "None")
             error = True
         if column_info is None and mode == "discovery":
             logger.error("No further information about column structure provided")

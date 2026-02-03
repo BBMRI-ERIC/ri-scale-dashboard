@@ -330,7 +330,7 @@
                       <div class="text-subtitle-2 mb-2">Chain Steps:</div>
                       <ul>
                         <li v-for="(step, idx) in selectedChainDefinition?.chain || []" :key="idx">
-                          {{ getStepTypeConfig(step.type)?.displayName || step.type }}
+                          {{ getStepTypeConfig(step.type)?.display_name || step.type }}
                         </li>
                       </ul>
                     </div>
@@ -529,14 +529,14 @@ const selectedProjectName = computed(() => {
 
 // Build stage library from shared config (step types + command chains)
 const stageLibrary = computed(() => {
-  const stepTypes = STEP_TYPES_CONFIG.stepTypes || {}
-  const chains = STEP_TYPES_CONFIG.commandChains || {}
+  const stepTypes = STEP_TYPES_CONFIG.step_types || {}
+  const chains = STEP_TYPES_CONFIG.command_chains || {}
 
   const typeEntries = Object.keys(stepTypes).map(key => ({
-    name: stepTypes[key].displayName,
-    type: stepTypes[key].backendType || key,
+    name: stepTypes[key].display_name,
+    type: stepTypes[key].backend_type || key,
     icon: stepTypes[key].icon,
-    description: `Type: ${stepTypes[key].backendType || key} - ${stepTypes[key].description}`,
+    description: `Type: ${stepTypes[key].backend_type || key} - ${stepTypes[key].description}`,
     isChain: false,
   }))
 
@@ -545,12 +545,12 @@ const stageLibrary = computed(() => {
     // Map substitutions to a userInputs object for form binding (include per_row column selectors)
     const userInputs = (chainDef.substitutions || [])
       .reduce((acc, s) => {
-        acc[s.name] = { name: s.name, label: s.label, default: s.default, helpText: s.help_text || s.helpText, scope: s.scope }
+        acc[s.name] = { name: s.name, label: s.label, default: s.default, helpText: s.help_text, scope: s.scope }
         return acc
       }, {})
 
     return {
-      name: chainDef.displayName || key,
+      name: chainDef.display_name || key,
       type: 'command_chain',
       icon: chainDef.icon || 'mdi-source-merge',
       description: chainDef.description || 'Composite command chain',
@@ -607,30 +607,38 @@ const selectedChainUserInputs = computed(() => {
   if (!def) return []
   const subs = def.substitutions || []
   // include all substitutions (form-scoped and per_row) so column name selectors are shown
-  return subs.map(s => ({ name: s.name, label: s.label, default: s.default, helpText: s.help_text || s.helpText, scope: s.scope }))
+  return subs.map(s => ({ name: s.name, label: s.label, default: s.default, helpText: s.help_text, scope: s.scope }))
 })
 
 // Expose step parameter exposures that are visible and resolved at form time
 const selectedChainExposures = computed(() => {
   const def = selectedChainDefinition.value
   if (!def) return []
-  const exposures = def.step_param_exposure || def.stepParamExposure || []
+  const exposures = def.step_param_exposure || []
   return exposures
-    .filter(e => e.visible === true && (e.resolve_timing === 'form' || e.resolveTiming === 'form' || !e.resolve_timing))
+    .filter(e => e.visible === true && (e.resolve_timing === 'form' || !e.resolve_timing))
     .map(e => {
-      const stepId = e.step_id || e.stepId || e.stepId || 'step'
-      const param = e.param || e.paramName || e.param_name || 'param'
+      const stepId = e.step_id || 'step'
+      const param = e.param || e.param_name || 'param'
       const name = `${stepId}.${param.replace(/\./g, '_')}`
-      return { name, label: e.label || `${stepId} ${param}`, default: e.default, helpText: e.help_text || e.helpText, stepId, param }
+      return { name, label: e.label || `${stepId} ${param}`, default: e.default, helpText: e.help_text, stepId, param }
     })
 })
 
 const selectedChainFormInputs = computed(() => {
-  // merge form-scoped substitutions and visible exposures; exposures may override if same name
-  const map = {}
-  selectedChainUserInputs.value.forEach(s => { map[s.name] = s })
-  selectedChainExposures.value.forEach(e => { map[e.name] = e })
-  return Object.values(map)
+  const inputs = []
+  
+  // Add all substitutions
+  selectedChainUserInputs.value.forEach(s => {
+    inputs.push({ ...s, isSubstitution: true })
+  })
+  
+  // Add visible exposures
+  selectedChainExposures.value.forEach(e => {
+    inputs.push({ ...e, isExposure: true })
+  })
+  
+  return inputs
 })
 
 // Generate unique ID for stages
@@ -685,15 +693,15 @@ function createChainStage(definition) {
   const chainDef = getChainDefinition(definition.chainKey)
   const defaults = {}
 
-  // Defaults from substitutions (include per_row so column selectors are initialised)
+  // Initialize substitutions
   const subs = (chainDef?.substitutions || [])
   subs.forEach(s => { defaults[s.name] = s.default ?? '' })
-
-  // Defaults from step parameter exposures that resolve at form time
-  const exposures = chainDef?.step_param_exposure || chainDef?.stepParamExposure || []
-  exposures.filter(e => (e.resolve_timing === 'form' || e.resolveTiming === 'form') ).forEach(e => {
-    const stepId = e.step_id || e.stepId || e.stepId
-    const param = e.param || e.paramName || e.param_name || 'param'
+  
+  // Initialize visible exposures (these are direct form inputs)
+  const exposures = chainDef?.step_param_exposure || []
+  exposures.filter(e => e.visible === true).forEach(e => {
+    const stepId = e.step_id
+    const param = e.param || e.param_name || 'param'
     const key = `${stepId}.${param.replace(/\./g, '_')}`
     defaults[key] = e.default ?? ''
   })
@@ -764,16 +772,12 @@ function buildObjectDefaults(paramConfig) {
   return nested
 }
 
-function toSnakeCase(str) {
-  return str.replace(/([A-Z])/g, '_$1').toLowerCase()
-}
-
 function isChainStage(stage) {
   return stage?.type === 'command_chain'
 }
 
 function getChainDefinition(chainKey) {
-  const chains = STEP_TYPES_CONFIG.commandChains || {}
+  const chains = STEP_TYPES_CONFIG.command_chains || {}
   return chains[chainKey]
 }
 
@@ -879,7 +883,7 @@ function getObjectSubParams(paramConfig) {
   const subParams = {}
   for (const key in paramConfig) {
     if (key !== 'label' && key !== 'type' && key !== 'required' && 
-        key !== 'required_when' && key !== 'help_text' && key !== 'helpText' &&
+        key !== 'required_when' && key !== 'help_text' &&
         typeof paramConfig[key] === 'object' && paramConfig[key].type) {
       subParams[key] = paramConfig[key]
     }
@@ -1054,8 +1058,7 @@ function buildManifestFromStages() {
       if (!chainDef) return
       const inputs = s.config.userInputs || {}
 
-      // Exposures may be stored under camelCased or snake_case keys depending on parsing
-      const exposures = chainDef.stepParamExposure || chainDef.step_param_exposure || []
+      const exposures = chainDef.step_param_exposure || []
 
       const setNested = (obj, path, value) => {
         const parts = (path || '').split('.')
@@ -1073,24 +1076,36 @@ function buildManifestFromStages() {
 
       ;(chainDef.chain || []).forEach((stepEntry, idx) => {
         const stepType = stepEntry.type
-        const displayName = getStepTypeConfig(stepType)?.displayName || stepEntry.display_name || stepEntry.type || `Step ${idx + 1}`
+        const displayName = getStepTypeConfig(stepType)?.display_name || stepEntry.display_name || stepEntry.type || `Step ${idx + 1}`
 
         // Collect exposures for this step instance by step id
-        const stepExposures = (exposures || []).filter(e => (e.stepId === stepEntry.id) || (e.step_id === stepEntry.id) || (e.stepId === stepEntry.step_id))
+        const stepId = stepEntry.id || stepEntry.step_id || `step${idx}`
+        const stepExposures = (exposures || []).filter(e => (e.step_id === stepId))
 
-        // Build params from exposures (defaults may contain placeholders)
+        // Build params from exposures
         const paramsObj = {}
         stepExposures.forEach(exp => {
-          const paramPath = exp.param || exp.paramName || exp.param_name || ''
-          const resolved = resolvePlaceholders(exp.default, inputs)
-          if (paramPath) setNested(paramsObj, paramPath, resolved)
+          const paramPath = exp.param || exp.param_name || ''
+          const expStepId = exp.step_id || exp.stepId
+          const expKey = `${expStepId}.${paramPath.replace(/\./g, '_')}`
+          
+          let value
+          if (exp.visible === true) {
+            // For visible exposures, use the user-provided value directly
+            value = inputs[expKey] ?? exp.default
+          } else {
+            // For hidden exposures, use default with substitutions applied
+            value = resolvePlaceholders(exp.default, inputs)
+          }
+          
+          if (paramPath) setNested(paramsObj, paramPath, value)
         })
 
         jobSteps.push({
           step_name: displayName,
           type: stepType,
-          command_chain_type: s.config.command_chain_type || s.config.chainKey || chainDef.command_chain_type || chainDef.chainKey,
-          chain_command_name: s.config.chain_command_name || s.config.name || chainDef.display_name || chainDef.displayName || chainDef.chainKey,
+          command_chain_type: s.config.command_chain_type || s.config.chainKey,
+          chain_command_name: s.config.chain_command_name || s.config.name,
           enabled: s.config.enabled !== false,
           params: paramsObj,
         })
@@ -1103,7 +1118,7 @@ function buildManifestFromStages() {
     const { enabled, name, ...params } = (s.config || {})
     jobSteps.push({
       step_name: displayName,
-      type: s.type || guessStepType(s.name),
+      type: s.type,
       command_chain_type: s.config?.command_chain_type,
       chain_command_name: s.config?.chain_command_name,
       enabled: enabled !== false,
@@ -1118,13 +1133,6 @@ function buildManifestFromStages() {
     simulated: true,
     job_steps: jobSteps,
   }
-}
-
-function guessStepType(stageName) {
-  const normalized = (stageName || '').toLowerCase()
-  if (normalized.includes('ingest')) return 'load'
-  if (normalized.includes('join')) return 'join'
-  return 'custom'
 }
 
 function resetYamlFromStages() {
@@ -1190,20 +1198,17 @@ function applyYamlToStages({ preserveSelection = false } = {}) {
         const id = generateId()
         const chainKey = group.chainType
         const chainDef = getChainDefinition(chainKey)
+        
+        if (!chainDef) {
+          console.warn(`Chain definition not found for chainKey: "${chainKey}". Available chains:`, Object.keys(STEP_TYPES_CONFIG.command_chains || {}))
+        }
 
-        // Extract substitution values from step params by reverse-mapping step_param_exposure
+        // Extract substitution and visible exposure values from step params
         const userInputs = {}
-        const exposures = chainDef?.step_param_exposure || chainDef?.stepParamExposure || []
+        const exposures = chainDef?.step_param_exposure || []
+        const substitutions = chainDef?.substitutions || []
 
-        // Build a map of stepId.param -> exposure for quick lookup
-        const exposureMap = {}
-        exposures.forEach(e => {
-          const stepId = e.step_id || e.stepId
-          const param = e.param || e.paramName || e.param_name || ''
-          exposureMap[`${stepId}.${param}`] = e
-        })
-
-        // Extract param values from steps and map back to substitution names
+        // Helper to get nested values from params
         const getNested = (obj, path) => {
           const parts = (path || '').split('.')
           let cur = obj
@@ -1214,23 +1219,106 @@ function applyYamlToStages({ preserveSelection = false } = {}) {
           return cur
         }
 
-        group.steps.forEach((step, stepIdx) => {
-          const stepId = `run_dicom` // TODO: make this dynamic based on chain def or step id in group
-          const params = step.params || {}
-          for (const [paramPath, value] of Object.entries(params)) {
-            const key = `${stepId}.${paramPath}`
-            const exp = exposureMap[key]
-            if (exp) {
-              const substName = exp.label || paramPath
-              userInputs[substName] = value
+        const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+        const extractSubstitutionsFromTemplate = (template, actual) => {
+          if (typeof template !== 'string' || typeof actual !== 'string') return {}
+
+          const tokenRegex = /{{([^{}]+)}}|{([^{}]+)}/g
+          let lastIndex = 0
+          let match
+          let pattern = '^'
+          const keys = []
+
+          while ((match = tokenRegex.exec(template)) !== null) {
+            const [full, doubleKey, singleKey] = match
+            const key = doubleKey || singleKey
+            pattern += escapeRegex(template.slice(lastIndex, match.index))
+            if (doubleKey) {
+              // {{key}} resolves to {value}, keep braces in actual
+              pattern += '\\{(?<k' + keys.length + '>.+?)\\}'
+            } else {
+              // {key} resolves to value
+              pattern += '(?<k' + keys.length + '>.+?)'
             }
+            keys.push(key)
+            lastIndex = match.index + full.length
           }
+
+          pattern += escapeRegex(template.slice(lastIndex)) + '$'
+
+          try {
+            const regex = new RegExp(pattern)
+            const m = actual.match(regex)
+            if (!m || !m.groups) return {}
+            const extracted = {}
+            keys.forEach((k, i) => {
+              const value = m.groups[`k${i}`]
+              if (value !== undefined) extracted[k] = value
+            })
+            return extracted
+          } catch (err) {
+            return {}
+          }
+        }
+
+        // Extract values for visible exposures and try to reverse-engineer substitutions
+        group.steps.forEach((step, stepIdx) => {
+          const chainStep = (chainDef?.chain || [])[stepIdx]
+          if (!chainStep) return
+          
+          const stepId = chainStep.id || chainStep.step_id || `step${stepIdx}`
+          const stepExposures = exposures.filter(e => e.step_id === stepId)
+          
+          stepExposures.forEach(exp => {
+            const paramPath = exp.param || exp.param_name || ''
+            const actualValue = getNested(step.params || {}, paramPath)
+            
+            if (exp.visible === true) {
+              // For visible exposures, store the actual value directly
+              const expKey = `${stepId}.${paramPath.replace(/\./g, '_')}`
+              if (actualValue !== undefined) {
+                userInputs[expKey] = actualValue
+              }
+            } else {
+              // For hidden exposures, try to extract substitution values
+              const defaultTemplate = exp.default || ''
+              if (typeof actualValue === 'string' && typeof defaultTemplate === 'string') {
+                // Check if default is a simple placeholder like "{output_dir}"
+                const simpleMatch = defaultTemplate.match(/^{([^}]+)}$/)
+                if (simpleMatch) {
+                  const substName = simpleMatch[1]
+                  if (!userInputs.hasOwnProperty(substName)) {
+                    userInputs[substName] = actualValue
+                  }
+                } else if (defaultTemplate.includes('{')) {
+                  // More complex template with placeholders
+                  const extracted = extractSubstitutionsFromTemplate(defaultTemplate, actualValue)
+                  Object.entries(extracted).forEach(([k, v]) => {
+                    if (!userInputs.hasOwnProperty(k)) {
+                      userInputs[k] = v
+                    }
+                  })
+                }
+              }
+            }
+          })
         })
 
-        // Also preserve direct substitution values
-        ;(chainDef?.substitutions || []).forEach(s => {
+        // Initialize any missing substitutions with defaults
+        substitutions.forEach(s => {
           if (!userInputs.hasOwnProperty(s.name)) {
             userInputs[s.name] = s.default ?? ''
+          }
+        })
+        
+        // Initialize any missing visible exposures with defaults
+        exposures.filter(e => e.visible === true).forEach(e => {
+          const stepId = e.step_id
+          const param = e.param || e.param_name || ''
+          const expKey = `${stepId}.${param.replace(/\./g, '_')}`
+          if (!userInputs.hasOwnProperty(expKey)) {
+            userInputs[expKey] = e.default ?? ''
           }
         })
 
@@ -1257,7 +1345,7 @@ function applyYamlToStages({ preserveSelection = false } = {}) {
         return {
           id,
           name: stepName,
-          type: step.type || guessStepType(stepName),
+          type: step.type,
           config: {
             ...params,
             enabled: step.enabled !== false,

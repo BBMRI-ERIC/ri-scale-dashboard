@@ -48,7 +48,6 @@ import {
   isParamRequired 
 } from '@/configs/step_types_config.js'
 
-// Access the config (camelCase keys)
 const config = STEP_TYPES_CONFIG
 
 // Get config for a step type

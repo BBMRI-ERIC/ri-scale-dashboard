@@ -4,13 +4,17 @@ Minimal FastAPI backend exposing endpoints to upload manifests/data and execute 
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import sys
 import uuid
+from datetime import datetime
+from io import StringIO
 from pathlib import Path
+from typing import Optional
 
-from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import yaml
@@ -58,6 +62,31 @@ app.add_middleware(
 UPLOAD_ROOT = BASE_DIR / "uploads"
 UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
 
+# In-memory job storage (use database in production)
+JOBS_STORE: dict = {}
+JOBS_STORE_FILE = BASE_DIR / ".jobs_store.json"
+
+def load_jobs_store() -> None:
+    """Load jobs from persistent storage on startup."""
+    global JOBS_STORE
+    if JOBS_STORE_FILE.exists():
+        try:
+            with JOBS_STORE_FILE.open("r") as f:
+                JOBS_STORE = json.load(f)
+            logger.info(f"Loaded {len(JOBS_STORE)} jobs from store")
+        except Exception as exc:
+            logger.warning(f"Failed to load jobs store: {exc}")
+            JOBS_STORE = {}
+
+def save_jobs_store() -> None:
+    """Persist jobs to disk."""
+    try:
+        with JOBS_STORE_FILE.open("w") as f:
+            json.dump(JOBS_STORE, f, indent=2, default=str)
+    except Exception as exc:
+        logger.error(f"Failed to save jobs store: {exc}")
+
+
 def get_project_dir(project_id: str) -> Path:
     """Get the base directory for a project."""
     project_dir = UPLOAD_ROOT / project_id
@@ -102,7 +131,7 @@ async def upload_data(file: UploadFile = File(...), project_id: str = Form("defa
 
 
 @app.post("/run")
-async def run_dps(manifest_path: str = Form(...)) -> JSONResponse:
+async def run_dps(manifest_path: str = Form(...), simulated: bool = Form(False)) -> JSONResponse:
     if not HAS_DPS_SERVICE:
         raise HTTPException(status_code=503, detail="DPS service is not available. Please install dependencies")
     
@@ -111,18 +140,382 @@ async def run_dps(manifest_path: str = Form(...)) -> JSONResponse:
         raise HTTPException(status_code=404, detail="Manifest path does not exist")
 
     try:
-        service = DataPreparationForExploitationService(str(manifest_file))
-        service.run()
+        # Load manifest and set simulated flag
+        with manifest_file.open("r", encoding="utf-8") as fh:
+            manifest_data = yaml.safe_load(fh)
+        
+        # Add or update simulated flag in manifest
+        manifest_data["simulated"] = simulated
+        
+        # Create temporary manifest file with simulated flag
+        temp_manifest = manifest_file.parent / f"temp_{manifest_file.name}"
+        with temp_manifest.open("w", encoding="utf-8") as fh:
+            yaml.safe_dump(manifest_data, fh, sort_keys=False, allow_unicode=False)
+        
+        try:
+            service = DataPreparationForExploitationService(str(temp_manifest))
+            service.run()
+        finally:
+            # Clean up temporary file
+            if temp_manifest.exists():
+                temp_manifest.unlink()
     except Exception as exc:
         logger.exception("DPS run failed")
         raise HTTPException(status_code=500, detail=f"DPS execution failed: {exc}") from exc
 
-    return JSONResponse({"status": "completed", "manifest_path": str(manifest_file)})
+    mode = "simulated" if simulated else "production"
+    return JSONResponse({"status": "completed", "manifest_path": str(manifest_file), "mode": mode})
 
 
 @app.get("/health")
 async def healthcheck() -> JSONResponse:
     return JSONResponse({"status": "ok"})
+
+
+@app.post("/jobs/submit")
+async def submit_job(payload: dict = Body(...)) -> JSONResponse:
+    """
+    Submit a new HPC job.
+    
+    Payload:
+    {
+        "projectId": str,
+        "jobType": str,  # "Training", "Inference", "Evaluation", "Generation", "Data Preparation"
+        "modelId": str (optional, not required for Data Preparation),
+        "datasetId": str (optional, not required for Data Preparation),
+        "manifestId": str (optional, required for Data Preparation),
+        "hpcSite": str,
+        "nodes": int,
+        "gpus": int,
+        "memory": str,
+        "notes": str (optional)
+    }
+    """
+    try:
+        project_id = payload.get("projectId")
+        job_type = payload.get("jobType")
+        manifest_id = payload.get("manifestId")
+        model_id = payload.get("modelId")
+        dataset_id = payload.get("datasetId")
+        hpc_site = payload.get("hpcSite")
+        nodes = payload.get("nodes")
+        gpus = payload.get("gpus")
+        memory = payload.get("memory")
+        notes = payload.get("notes", "")
+        simulated = payload.get("simulated", False)  # Default to production mode
+
+        # Validate required fields
+        if not project_id:
+            raise HTTPException(status_code=400, detail="projectId is required")
+        if not job_type:
+            raise HTTPException(status_code=400, detail="jobType is required")
+        if not hpc_site:
+            raise HTTPException(status_code=400, detail="hpcSite is required")
+        if nodes is None:
+            raise HTTPException(status_code=400, detail="nodes is required")
+        if gpus is None:
+            raise HTTPException(status_code=400, detail="gpus is required")
+        if not memory:
+            raise HTTPException(status_code=400, detail="memory is required")
+
+        # Validate job type specific requirements
+        if job_type == "Data Preparation":
+            if not manifest_id:
+                raise HTTPException(status_code=400, detail="manifestId is required for Data Preparation jobs")
+            # Verify manifest exists
+            manifest_dir = get_project_manifest_dir(project_id)
+            manifest_path = manifest_dir / manifest_id
+            if not manifest_path.exists():
+                raise HTTPException(status_code=404, detail=f"Manifest {manifest_id} not found")
+        else:
+            if not model_id:
+                raise HTTPException(status_code=400, detail="modelId is required for non-Data Preparation jobs")
+            if not dataset_id:
+                raise HTTPException(status_code=400, detail="datasetId is required for non-Data Preparation jobs")
+
+        # Create job record
+        job_id = f"job-{uuid.uuid4().hex[:16]}"
+        now = datetime.utcnow().isoformat()
+
+        job = {
+            "id": job_id,
+            "projectId": project_id,
+            "jobType": job_type,
+            "modelId": model_id,
+            "datasetId": dataset_id,
+            "manifestId": manifest_id,
+            "hpcSite": hpc_site,
+            "nodes": nodes,
+            "gpus": gpus,
+            "memory": memory,
+            "notes": notes,
+            "simulated": simulated,
+            "status": "queued",
+            "submittedAt": now,
+            "startedAt": None,
+            "completedAt": None,
+            "runtime": None,
+            "error": None
+        }
+
+        JOBS_STORE[job_id] = job
+        save_jobs_store()
+
+        logger.info(f"Job submitted: {job_id} (type: {job_type}, project: {project_id})")
+
+        return JSONResponse({
+            "status": "success",
+            "job": job
+        })
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Error submitting job")
+        raise HTTPException(status_code=500, detail=f"Failed to submit job: {str(exc)}") from exc
+
+
+@app.post("/jobs/{job_id}/execute")
+async def execute_job(job_id: str, payload: dict = Body(default={})) -> JSONResponse:
+    """
+    Execute a Data Preparation job using its associated manifest.
+    Supports both simulated and production modes - mode can be specified at execution time.
+    """
+    try:
+        if job_id not in JOBS_STORE:
+            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+        job = JOBS_STORE[job_id]
+        
+        if job["jobType"] != "Data Preparation":
+            raise HTTPException(status_code=400, detail="Only Data Preparation jobs can be executed via this endpoint")
+        
+        if job["status"] != "queued":
+            raise HTTPException(status_code=400, detail=f"Job must be in queued status (current: {job['status']})")
+
+        manifest_id = job["manifestId"]
+        project_id = job["projectId"]
+        # Get simulated mode from request body (defaults to false = production mode)
+        simulated = payload.get("simulated", False)
+        
+        # Update job with execution mode
+        job["simulated"] = simulated
+        
+        # Get manifest path
+        manifest_dir = get_project_manifest_dir(project_id)
+        manifest_path = manifest_dir / manifest_id
+        
+        if not manifest_path.exists():
+            raise HTTPException(status_code=404, detail=f"Manifest {manifest_id} not found")
+
+        # Update job status
+        job["status"] = "running"
+        job["startedAt"] = datetime.utcnow().isoformat()
+        save_jobs_store()
+
+        if not HAS_DPS_SERVICE:
+            job["status"] = "failed"
+            job["error"] = "DPS service is not available"
+            save_jobs_store()
+            raise HTTPException(status_code=503, detail="DPS service is not available. Please install dependencies")
+
+        # Capture logs
+        log_stream = StringIO()
+        log_handler = logging.StreamHandler(log_stream)
+        log_handler.setLevel(logging.INFO)
+        log_formatter = logging.Formatter('[%(asctime)s] %(levelname)s - %(message)s')
+        log_handler.setFormatter(log_formatter)
+        
+        # Get DPS logger and add handler
+        dps_logger = logging.getLogger('dps_service')
+        root_logger = logging.getLogger()
+        dps_logger.addHandler(log_handler)
+        root_logger.addHandler(log_handler)
+
+        try:
+            # Load manifest and set simulated flag
+            with manifest_path.open("r", encoding="utf-8") as fh:
+                manifest_data = yaml.safe_load(fh)
+            
+            # Add or update simulated flag in manifest
+            manifest_data["simulated"] = simulated
+            
+            # Create temporary manifest file with simulated flag
+            temp_manifest = manifest_path.parent / f"temp_{job_id}_{manifest_path.name}"
+            with temp_manifest.open("w", encoding="utf-8") as fh:
+                yaml.safe_dump(manifest_data, fh, sort_keys=False, allow_unicode=False)
+            
+            log_stream.write(f"[{datetime.utcnow().isoformat()}] INFO - Starting DPS service execution\n")
+            log_stream.write(f"[{datetime.utcnow().isoformat()}] INFO - Mode: {'Simulated' if simulated else 'Production'}\n")
+            log_stream.write(f"[{datetime.utcnow().isoformat()}] INFO - Manifest: {manifest_id}\n")
+            log_stream.write(f"[{datetime.utcnow().isoformat()}] INFO - Project: {project_id}\n")
+            
+            try:
+                service = DataPreparationForExploitationService(str(temp_manifest))
+                service.run()
+                
+                log_stream.write(f"[{datetime.utcnow().isoformat()}] INFO - DPS service completed successfully\n")
+                
+                # Job completed successfully
+                job["status"] = "completed"
+                job["completedAt"] = datetime.utcnow().isoformat()
+                # Calculate runtime
+                if job["startedAt"]:
+                    start = datetime.fromisoformat(job["startedAt"])
+                    end = datetime.fromisoformat(job["completedAt"])
+                    duration = end - start
+                    hours, remainder = divmod(int(duration.total_seconds()), 3600)
+                    minutes, _ = divmod(remainder, 60)
+                    job["runtime"] = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+                
+            finally:
+                # Clean up temporary file
+                if temp_manifest.exists():
+                    temp_manifest.unlink()
+                    
+        except Exception as exec_exc:
+            logger.exception("DPS execution failed")
+            log_stream.write(f"[{datetime.utcnow().isoformat()}] ERROR - DPS execution failed: {exec_exc}\n")
+            job["status"] = "failed"
+            job["error"] = str(exec_exc)
+            save_jobs_store()
+            raise HTTPException(status_code=500, detail=f"DPS execution failed: {exec_exc}") from exec_exc
+        finally:
+            # Remove log handler
+            dps_logger.removeHandler(log_handler)
+            root_logger.removeHandler(log_handler)
+            log_handler.close()
+
+        # Store logs in job
+        job["logs"] = log_stream.getvalue()
+        save_jobs_store()
+        mode = "simulated" if simulated else "production"
+        logger.info(f"Job {job_id} executed in {mode} mode")
+
+        return JSONResponse({
+            "status": "success",
+            "message": f"Job executed in {mode} mode",
+            "job": job,
+            "logs": job["logs"]
+        })
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Error executing job")
+        raise HTTPException(status_code=500, detail=f"Failed to execute job: {str(exc)}") from exc
+
+
+@app.get("/jobs")
+async def list_jobs(project_id: Optional[str] = Query(None)) -> JSONResponse:
+    """List all jobs, optionally filtered by project."""
+    try:
+        jobs = list(JOBS_STORE.values())
+        
+        if project_id:
+            jobs = [j for j in jobs if j["projectId"] == project_id]
+
+        # Sort by submitted date (newest first)
+        jobs.sort(key=lambda x: x["submittedAt"], reverse=True)
+
+        logger.info(f"Listed {len(jobs)} jobs" + (f" for project {project_id}" if project_id else ""))
+
+        return JSONResponse({
+            "status": "success",
+            "jobs": jobs
+        })
+
+    except Exception as exc:
+        logger.exception("Error listing jobs")
+        raise HTTPException(status_code=500, detail=f"Failed to list jobs: {str(exc)}") from exc
+
+
+@app.get("/jobs/{job_id}")
+async def get_job(job_id: str) -> JSONResponse:
+    """Get details of a specific job."""
+    try:
+        if job_id not in JOBS_STORE:
+            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+        job = JOBS_STORE[job_id]
+
+        logger.info(f"Retrieved job {job_id}")
+
+        return JSONResponse({
+            "status": "success",
+            "job": job
+        })
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Error retrieving job")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve job: {str(exc)}") from exc
+
+
+@app.post("/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str) -> JSONResponse:
+    """Cancel a queued or running job."""
+    try:
+        if job_id not in JOBS_STORE:
+            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+        job = JOBS_STORE[job_id]
+        
+        if job["status"] not in ["queued", "running"]:
+            raise HTTPException(status_code=400, detail=f"Cannot cancel job with status {job['status']}")
+
+        job["status"] = "cancelled"
+        save_jobs_store()
+
+        logger.info(f"Job cancelled: {job_id}")
+
+        return JSONResponse({
+            "status": "success",
+            "message": f"Job {job_id} cancelled",
+            "job": job
+        })
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Error cancelling job")
+        raise HTTPException(status_code=500, detail=f"Failed to cancel job: {str(exc)}") from exc
+
+
+@app.post("/jobs/{job_id}/retry")
+async def retry_job(job_id: str) -> JSONResponse:
+    """Retry a failed job."""
+    try:
+        if job_id not in JOBS_STORE:
+            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+        job = JOBS_STORE[job_id]
+        
+        if job["status"] != "failed":
+            raise HTTPException(status_code=400, detail=f"Can only retry failed jobs (current status: {job['status']})")
+
+        job["status"] = "queued"
+        job["startedAt"] = None
+        job["completedAt"] = None
+        job["runtime"] = None
+        job["error"] = None
+        save_jobs_store()
+
+        logger.info(f"Job retry: {job_id}")
+
+        return JSONResponse({
+            "status": "success",
+            "message": f"Job {job_id} queued for retry",
+            "job": job
+        })
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Error retrying job")
+        raise HTTPException(status_code=500, detail=f"Failed to retry job: {str(exc)}") from exc
+
 
 
 @app.post("/pipeline/save")
@@ -278,6 +671,45 @@ async def update_pipeline(payload: dict = Body(...)) -> JSONResponse:
     except Exception as exc:
         logger.exception("Error updating pipeline")
         raise HTTPException(status_code=500, detail=f"Failed to update pipeline: {str(exc)}") from exc
+
+
+@app.get("/manifests")
+async def list_manifests(project_id: str) -> JSONResponse:
+    """List all manifest files available for a project (for Data Preparation jobs)."""
+    try:
+        if not project_id:
+            raise HTTPException(status_code=400, detail="project_id is required")
+
+        project_manifest_dir = get_project_manifest_dir(project_id)
+        
+        manifests = []
+        if project_manifest_dir.exists():
+            for yaml_file in sorted(project_manifest_dir.glob("*.yaml"), reverse=True):
+                manifests.append({
+                    "id": yaml_file.name,
+                    "name": yaml_file.name,
+                    "path": str(yaml_file),
+                    "created_at": yaml_file.stat().st_mtime
+                })
+        
+        logger.info(f"Listed {len(manifests)} manifests for project {project_id}")
+        return JSONResponse({
+            "status": "success",
+            "project_id": project_id,
+            "manifests": manifests
+        })
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Error listing manifests")
+        raise HTTPException(status_code=500, detail=f"Failed to list manifests: {str(exc)}") from exc
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Load jobs store on application startup."""
+    load_jobs_store()
+    logger.info("Application startup complete")
 
 
 if __name__ == "__main__":
