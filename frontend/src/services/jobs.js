@@ -108,6 +108,31 @@ export async function getJob(jobId) {
 }
 
 /**
+ * Get live logs for a specific job
+ * @param {string} jobId - The job ID
+ * @returns {Promise<object>} Response with logs and status
+ */
+export async function getJobLogs(jobId) {
+  if (!jobId) {
+    throw new Error('Job ID is required')
+  }
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/jobs/${jobId}/logs`)
+
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || `Failed to fetch job logs: ${response.statusText}`)
+    }
+
+    return await response.json()
+  } catch (err) {
+    console.error('Get job logs error:', err)
+    throw err
+  }
+}
+
+/**
  * Cancel a job
  * @param {string} jobId - The job ID
  * @returns {Promise<object>} Response with updated job
@@ -163,6 +188,36 @@ export async function retryJob(jobId) {
     return await response.json()
   } catch (err) {
     console.error('Retry job error:', err)
+    throw err
+  }
+}
+
+/**
+ * Rerun a finished job
+ * @param {string} jobId - The job ID
+ * @returns {Promise<object>} Response with new job
+ */
+export async function rerunJob(jobId) {
+  if (!jobId) {
+    throw new Error('Job ID is required')
+  }
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/jobs/${jobId}/rerun`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      }
+    })
+
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || `Failed to rerun job: ${response.statusText}`)
+    }
+
+    return await response.json()
+  } catch (err) {
+    console.error('Rerun job error:', err)
     throw err
   }
 }

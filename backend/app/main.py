@@ -8,18 +8,17 @@ import json
 import logging
 import shutil
 import sys
+import threading
 import uuid
 from datetime import datetime
-from io import StringIO
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Body, FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import BackgroundTasks, Body, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import yaml
 
-from logging import Logger
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +64,7 @@ UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
 # In-memory job storage (use database in production)
 JOBS_STORE: dict = {}
 JOBS_STORE_FILE = BASE_DIR / ".jobs_store.json"
+JOBS_STORE_LOCK = threading.Lock()
 
 def load_jobs_store() -> None:
     """Load jobs from persistent storage on startup."""
@@ -85,6 +85,123 @@ def save_jobs_store() -> None:
             json.dump(JOBS_STORE, f, indent=2, default=str)
     except Exception as exc:
         logger.error(f"Failed to save jobs store: {exc}")
+
+
+def _update_job(job_id: str, updates: dict) -> None:
+    with JOBS_STORE_LOCK:
+        job = JOBS_STORE.get(job_id)
+        if not job:
+            return
+        job.update(updates)
+    save_jobs_store()
+
+
+def _append_job_log(job_id: str, message: str) -> None:
+    with JOBS_STORE_LOCK:
+        job = JOBS_STORE.get(job_id)
+        if not job:
+            return
+        existing = job.get("logs") or ""
+        job["logs"] = existing + message
+    save_jobs_store()
+
+
+class JobLogHandler(logging.Handler):
+    def __init__(self, job_id: str) -> None:
+        super().__init__()
+        self.job_id = job_id
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = self.format(record)
+            _append_job_log(self.job_id, msg + "\n")
+        except Exception:
+            logger.exception("Failed to write job log")
+
+
+def _run_data_preparation_job(job_id: str, simulated: bool) -> None:
+    try:
+        with JOBS_STORE_LOCK:
+            job = JOBS_STORE.get(job_id)
+        if not job:
+            return
+
+        manifest_id = job.get("manifestId")
+        project_id = job.get("projectId")
+
+        if not manifest_id or not project_id:
+            _update_job(job_id, {"status": "failed", "error": "Missing manifestId or projectId"})
+            return
+
+        manifest_dir = get_project_manifest_dir(project_id)
+        manifest_path = manifest_dir / manifest_id
+        if not manifest_path.exists():
+            _update_job(job_id, {"status": "failed", "error": f"Manifest {manifest_id} not found"})
+            return
+
+        # Attach log handler
+        log_handler = JobLogHandler(job_id)
+        log_handler.setLevel(logging.INFO)
+        log_formatter = logging.Formatter('[%(asctime)s] %(levelname)s - %(message)s')
+        log_handler.setFormatter(log_formatter)
+
+        dps_logger = logging.getLogger('dps_service')
+        root_logger = logging.getLogger()
+        dps_logger.addHandler(log_handler)
+        root_logger.addHandler(log_handler)
+
+        try:
+            with manifest_path.open("r", encoding="utf-8") as fh:
+                manifest_data = yaml.safe_load(fh)
+
+            manifest_data["simulated"] = simulated
+
+            temp_manifest = manifest_path.parent / f"temp_{job_id}_{manifest_path.name}"
+            with temp_manifest.open("w", encoding="utf-8") as fh:
+                yaml.safe_dump(manifest_data, fh, sort_keys=False, allow_unicode=False)
+
+            _append_job_log(job_id, f"[{datetime.utcnow().isoformat()}] INFO - Starting DPS service execution\n")
+            _append_job_log(job_id, f"[{datetime.utcnow().isoformat()}] INFO - Mode: {'Simulated' if simulated else 'Production'}\n")
+            _append_job_log(job_id, f"[{datetime.utcnow().isoformat()}] INFO - Manifest: {manifest_id}\n")
+            _append_job_log(job_id, f"[{datetime.utcnow().isoformat()}] INFO - Project: {project_id}\n")
+
+            try:
+                service = DataPreparationForExploitationService(str(temp_manifest))
+                service.run()
+
+                _append_job_log(job_id, f"[{datetime.utcnow().isoformat()}] INFO - DPS service completed successfully\n")
+
+                updates = {
+                    "status": "completed",
+                    "completedAt": datetime.utcnow().isoformat()
+                }
+
+                started_at = job.get("startedAt")
+                if started_at:
+                    start = datetime.fromisoformat(started_at)
+                    end = datetime.fromisoformat(updates["completedAt"])
+                    duration = end - start
+                    hours, remainder = divmod(int(duration.total_seconds()), 3600)
+                    minutes, _ = divmod(remainder, 60)
+                    updates["runtime"] = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+
+                _update_job(job_id, updates)
+
+            finally:
+                if temp_manifest.exists():
+                    temp_manifest.unlink()
+
+        except Exception as exec_exc:
+            logger.exception("DPS execution failed")
+            _append_job_log(job_id, f"[{datetime.utcnow().isoformat()}] ERROR - DPS execution failed: {exec_exc}\n")
+            _update_job(job_id, {"status": "failed", "error": str(exec_exc)})
+        finally:
+            dps_logger.removeHandler(log_handler)
+            root_logger.removeHandler(log_handler)
+            log_handler.close()
+
+    except Exception:
+        logger.exception("Unexpected error in background job runner")
 
 
 def get_project_dir(project_id: str) -> Path:
@@ -276,7 +393,11 @@ async def submit_job(payload: dict = Body(...)) -> JSONResponse:
 
 
 @app.post("/jobs/{job_id}/execute")
-async def execute_job(job_id: str, payload: dict = Body(default={})) -> JSONResponse:
+async def execute_job(
+    job_id: str,
+    payload: dict = Body(default={}),
+    background_tasks: BackgroundTasks = None
+) -> JSONResponse:
     """
     Execute a Data Preparation job using its associated manifest.
     Supports both simulated and production modes - mode can be specified at execution time.
@@ -298,19 +419,14 @@ async def execute_job(job_id: str, payload: dict = Body(default={})) -> JSONResp
         # Get simulated mode from request body (defaults to false = production mode)
         simulated = payload.get("simulated", False)
         
-        # Update job with execution mode
+        # Update job with execution mode and status
         job["simulated"] = simulated
-        
-        # Get manifest path
-        manifest_dir = get_project_manifest_dir(project_id)
-        manifest_path = manifest_dir / manifest_id
-        
-        if not manifest_path.exists():
-            raise HTTPException(status_code=404, detail=f"Manifest {manifest_id} not found")
-
-        # Update job status
         job["status"] = "running"
         job["startedAt"] = datetime.utcnow().isoformat()
+        job["completedAt"] = None
+        job["runtime"] = None
+        job["error"] = None
+        job["logs"] = ""
         save_jobs_store()
 
         if not HAS_DPS_SERVICE:
@@ -319,84 +435,18 @@ async def execute_job(job_id: str, payload: dict = Body(default={})) -> JSONResp
             save_jobs_store()
             raise HTTPException(status_code=503, detail="DPS service is not available. Please install dependencies")
 
-        # Capture logs
-        log_stream = StringIO()
-        log_handler = logging.StreamHandler(log_stream)
-        log_handler.setLevel(logging.INFO)
-        log_formatter = logging.Formatter('[%(asctime)s] %(levelname)s - %(message)s')
-        log_handler.setFormatter(log_formatter)
-        
-        # Get DPS logger and add handler
-        dps_logger = logging.getLogger('dps_service')
-        root_logger = logging.getLogger()
-        dps_logger.addHandler(log_handler)
-        root_logger.addHandler(log_handler)
+        if background_tasks is None:
+            background_tasks = BackgroundTasks()
 
-        try:
-            # Load manifest and set simulated flag
-            with manifest_path.open("r", encoding="utf-8") as fh:
-                manifest_data = yaml.safe_load(fh)
-            
-            # Add or update simulated flag in manifest
-            manifest_data["simulated"] = simulated
-            
-            # Create temporary manifest file with simulated flag
-            temp_manifest = manifest_path.parent / f"temp_{job_id}_{manifest_path.name}"
-            with temp_manifest.open("w", encoding="utf-8") as fh:
-                yaml.safe_dump(manifest_data, fh, sort_keys=False, allow_unicode=False)
-            
-            log_stream.write(f"[{datetime.utcnow().isoformat()}] INFO - Starting DPS service execution\n")
-            log_stream.write(f"[{datetime.utcnow().isoformat()}] INFO - Mode: {'Simulated' if simulated else 'Production'}\n")
-            log_stream.write(f"[{datetime.utcnow().isoformat()}] INFO - Manifest: {manifest_id}\n")
-            log_stream.write(f"[{datetime.utcnow().isoformat()}] INFO - Project: {project_id}\n")
-            
-            try:
-                service = DataPreparationForExploitationService(str(temp_manifest))
-                service.run()
-                
-                log_stream.write(f"[{datetime.utcnow().isoformat()}] INFO - DPS service completed successfully\n")
-                
-                # Job completed successfully
-                job["status"] = "completed"
-                job["completedAt"] = datetime.utcnow().isoformat()
-                # Calculate runtime
-                if job["startedAt"]:
-                    start = datetime.fromisoformat(job["startedAt"])
-                    end = datetime.fromisoformat(job["completedAt"])
-                    duration = end - start
-                    hours, remainder = divmod(int(duration.total_seconds()), 3600)
-                    minutes, _ = divmod(remainder, 60)
-                    job["runtime"] = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
-                
-            finally:
-                # Clean up temporary file
-                if temp_manifest.exists():
-                    temp_manifest.unlink()
-                    
-        except Exception as exec_exc:
-            logger.exception("DPS execution failed")
-            log_stream.write(f"[{datetime.utcnow().isoformat()}] ERROR - DPS execution failed: {exec_exc}\n")
-            job["status"] = "failed"
-            job["error"] = str(exec_exc)
-            save_jobs_store()
-            raise HTTPException(status_code=500, detail=f"DPS execution failed: {exec_exc}") from exec_exc
-        finally:
-            # Remove log handler
-            dps_logger.removeHandler(log_handler)
-            root_logger.removeHandler(log_handler)
-            log_handler.close()
+        background_tasks.add_task(_run_data_preparation_job, job_id, simulated)
 
-        # Store logs in job
-        job["logs"] = log_stream.getvalue()
-        save_jobs_store()
         mode = "simulated" if simulated else "production"
-        logger.info(f"Job {job_id} executed in {mode} mode")
+        logger.info(f"Job {job_id} queued for execution in {mode} mode")
 
         return JSONResponse({
             "status": "success",
-            "message": f"Job executed in {mode} mode",
-            "job": job,
-            "logs": job["logs"]
+            "message": f"Job queued for execution in {mode} mode",
+            "job": job
         })
 
     except HTTPException:
@@ -451,6 +501,28 @@ async def get_job(job_id: str) -> JSONResponse:
     except Exception as exc:
         logger.exception("Error retrieving job")
         raise HTTPException(status_code=500, detail=f"Failed to retrieve job: {str(exc)}") from exc
+
+
+@app.get("/jobs/{job_id}/logs")
+async def get_job_logs(job_id: str) -> JSONResponse:
+    """Get live logs and status for a specific job."""
+    try:
+        if job_id not in JOBS_STORE:
+            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+        job = JOBS_STORE[job_id]
+
+        return JSONResponse({
+            "status": "success",
+            "jobStatus": job.get("status"),
+            "logs": job.get("logs") or ""
+        })
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Error retrieving job logs")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve job logs: {str(exc)}") from exc
 
 
 @app.post("/jobs/{job_id}/cancel")
@@ -515,6 +587,76 @@ async def retry_job(job_id: str) -> JSONResponse:
     except Exception as exc:
         logger.exception("Error retrying job")
         raise HTTPException(status_code=500, detail=f"Failed to retry job: {str(exc)}") from exc
+
+
+@app.post("/jobs/{job_id}/rerun")
+async def rerun_job(job_id: str) -> JSONResponse:
+    """Rerun a finished job by creating a new queued job with the same parameters."""
+    try:
+        if job_id not in JOBS_STORE:
+            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+        job = JOBS_STORE[job_id]
+
+        if job["status"] not in ["completed", "failed", "cancelled"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Can only rerun completed, failed, or cancelled jobs (current status: {job['status']})"
+            )
+
+        # Validate manifest still exists for Data Preparation jobs
+        if job.get("jobType") == "Data Preparation":
+            project_id = job.get("projectId")
+            manifest_id = job.get("manifestId")
+            if not project_id or not manifest_id:
+                raise HTTPException(status_code=400, detail="Missing projectId or manifestId for Data Preparation job")
+            manifest_dir = get_project_manifest_dir(project_id)
+            manifest_path = manifest_dir / manifest_id
+            if not manifest_path.exists():
+                raise HTTPException(status_code=404, detail=f"Manifest {manifest_id} not found")
+
+        new_job_id = f"job-{uuid.uuid4().hex[:16]}"
+        now = datetime.utcnow().isoformat()
+
+        new_job = {
+            "id": new_job_id,
+            "projectId": job.get("projectId"),
+            "jobType": job.get("jobType"),
+            "modelId": job.get("modelId"),
+            "datasetId": job.get("datasetId"),
+            "manifestId": job.get("manifestId"),
+            "hpcSite": job.get("hpcSite"),
+            "nodes": job.get("nodes"),
+            "gpus": job.get("gpus"),
+            "memory": job.get("memory"),
+            "notes": job.get("notes", ""),
+            "simulated": job.get("simulated", False),
+            "status": "queued",
+            "submittedAt": now,
+            "startedAt": None,
+            "completedAt": None,
+            "runtime": None,
+            "error": None,
+            "logs": None,
+            "rerunOf": job_id
+        }
+
+        JOBS_STORE[new_job_id] = new_job
+        save_jobs_store()
+
+        logger.info(f"Job rerun: {job_id} -> {new_job_id}")
+
+        return JSONResponse({
+            "status": "success",
+            "message": f"Job {job_id} queued for rerun",
+            "job": new_job
+        })
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Error rerunning job")
+        raise HTTPException(status_code=500, detail=f"Failed to rerun job: {str(exc)}") from exc
 
 
 

@@ -220,6 +220,15 @@
                   />
                   <v-btn
                     v-if="item.status === 'completed'"
+                    icon="mdi-replay"
+                    size="small"
+                    variant="text"
+                    color="warning"
+                    @click="rerunJob(item)"
+                    title="Rerun job"
+                  />
+                  <v-btn
+                    v-if="item.status === 'completed'"
                     icon="mdi-download"
                     size="small"
                     variant="text"
@@ -441,7 +450,7 @@
           </div>
 
           <!-- Execution Logs -->
-          <div class="logs-section" v-if="selectedJob.logs">
+          <div class="logs-section" v-if="selectedJob.logs || selectedJob.status === 'running'">
             <div class="d-flex align-center justify-space-between mb-2">
               <h4>Execution Logs</h4>
               <v-btn
@@ -636,7 +645,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, onBeforeUnmount } from 'vue'
 import { useProjectsStore } from '@/stores/projects'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import AppHeader from '@/components/layout/AppHeader.vue'
@@ -678,6 +687,8 @@ const executeMode = ref(false)  // false = Production, true = Simulated
 // Logs dialog state
 const showLogsDialog = ref(false)
 const executionLogs = ref('')
+const logsPollingTimer = ref(null)
+const activeLogJobId = ref(null)
 
 // Mock data
 const jobs = ref([
@@ -960,6 +971,9 @@ async function refreshJobs() {
 function viewJob(job) {
   selectedJob.value = job
   showDetailsDialog.value = true
+  if (job?.status === 'running') {
+    startLogsPolling(job.id)
+  }
 }
 
 function stopJob(job) {
@@ -974,11 +988,24 @@ function cancelJob(job) {
   }
 }
 
-function retryJob(job) {
-  job.status = 'queued'
-  job.error = null
-  job.startedAt = null
-  job.runtime = null
+async function retryJob(job) {
+  try {
+    await jobsService.retryJob(job.id)
+    await loadJobs()
+  } catch (err) {
+    console.error('Retry job failed:', err)
+    alert(`Failed to retry job: ${err.message}`)
+  }
+}
+
+async function rerunJob(job) {
+  try {
+    await jobsService.rerunJob(job.id)
+    await loadJobs()
+  } catch (err) {
+    console.error('Rerun job failed:', err)
+    alert(`Failed to rerun job: ${err.message}`)
+  }
 }
 
 function downloadResults(job) {
@@ -1111,15 +1138,16 @@ function openExecuteDialog(job) {
 async function executeJobWithMode() {
   try {
     isSubmitting.value = true
-    const result = await jobsService.executeJob(executeJobId.value, executeMode.value)
+    await jobsService.executeJob(executeJobId.value, executeMode.value)
     showExecuteDialog.value = false
+    
+    // Show logs dialog and start live polling
+    executionLogs.value = ''
+    showLogsDialog.value = true
+    startLogsPolling(executeJobId.value)
+    
     executeJobId.value = null
     selectedJob.value = null
-    
-    // Show logs dialog
-    executionLogs.value = result.logs || 'No logs available'
-    showLogsDialog.value = true
-    
     await loadJobs()  // Reload to show updated status
   } catch (err) {
     console.error('Failed to execute job:', err)
@@ -1130,6 +1158,40 @@ async function executeJobWithMode() {
   }
 }
 
+async function fetchJobLogs(jobId) {
+  try {
+    const response = await jobsService.getJobLogs(jobId)
+    executionLogs.value = response.logs || ''
+
+    if (selectedJob.value?.id === jobId) {
+      selectedJob.value.logs = executionLogs.value
+    }
+
+    if (response.jobStatus && response.jobStatus !== 'running' && response.jobStatus !== 'queued') {
+      stopLogsPolling()
+      await loadJobs()
+    }
+  } catch (err) {
+    console.error('Failed to fetch job logs:', err)
+  }
+}
+
+function startLogsPolling(jobId) {
+  if (!jobId) return
+  stopLogsPolling()
+  activeLogJobId.value = jobId
+  fetchJobLogs(jobId)
+  logsPollingTimer.value = setInterval(() => fetchJobLogs(jobId), 2000)
+}
+
+function stopLogsPolling() {
+  if (logsPollingTimer.value) {
+    clearInterval(logsPollingTimer.value)
+    logsPollingTimer.value = null
+  }
+  activeLogJobId.value = null
+}
+
 function copyLogs(logs) {
   navigator.clipboard.writeText(logs).then(() => {
     console.log('Logs copied to clipboard')
@@ -1137,6 +1199,16 @@ function copyLogs(logs) {
     console.error('Failed to copy logs:', err)
   })
 }
+
+watch([showLogsDialog, showDetailsDialog], ([logsOpen, detailsOpen]) => {
+  if (!logsOpen && !detailsOpen) {
+    stopLogsPolling()
+  }
+})
+
+onBeforeUnmount(() => {
+  stopLogsPolling()
+})
 </script>
 
 <style scoped lang="scss">
