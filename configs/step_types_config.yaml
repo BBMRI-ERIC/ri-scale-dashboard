@@ -79,6 +79,7 @@ step_types:
         label: "Data Path"
         type: "string"
         required: true
+        open_file_dialog: true
         default: "./data"
         help_text: "Directory path (for discovery) or file path (for CSV)"
         validation:
@@ -429,6 +430,7 @@ command_chains:
         label: "Dicom Output Directory"
         help_text: "Directory to store generated DICOM output"
         type: string
+        open_file_dialog: true
         scope: form
         default: "./dicom_output"
 

@@ -705,6 +705,230 @@ async def list_manifests(project_id: str) -> JSONResponse:
         raise HTTPException(status_code=500, detail=f"Failed to list manifests: {str(exc)}") from exc
 
 
+@app.get("/projects/{project_id}/data-browser")
+async def browse_data_directory(project_id: str, path: str = Query("")) -> JSONResponse:
+    """
+    Browse the data directory of a project.
+    
+    Query Parameters:
+    - path: subdirectory path relative to the project's data folder
+    
+    Returns:
+    {
+        "current_path": str,
+        "parent_path": str (or null),
+        "entries": [
+            {
+                "name": str,
+                "type": "file" | "directory",
+                "path": str,
+                "size": int (for files)
+            }
+        ],
+        "error": str (if any)
+    }
+    """
+    try:
+        # Get the base data directory for the project
+        data_dir = get_project_data_dir(project_id)
+        
+        # Normalize and validate the requested path
+        if path:
+            # Remove leading/trailing slashes and normalize
+            path = path.strip("/")
+            requested_dir = data_dir / path
+        else:
+            requested_dir = data_dir
+        
+        # Security check: ensure the resolved path is within data_dir
+        try:
+            requested_dir = requested_dir.resolve()
+            data_dir = data_dir.resolve()
+            if not str(requested_dir).startswith(str(data_dir)):
+                raise HTTPException(status_code=403, detail="Access denied: path is outside project data directory")
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid path: {exc}") from exc
+        
+        if not requested_dir.exists():
+            raise HTTPException(status_code=404, detail=f"Path does not exist: {path}")
+        
+        if not requested_dir.is_dir():
+            raise HTTPException(status_code=400, detail=f"Path is not a directory: {path}")
+        
+        # List directory contents
+        entries = []
+        try:
+            for item in sorted(requested_dir.iterdir()):
+                entry = {
+                    "name": item.name,
+                    "type": "directory" if item.is_dir() else "file",
+                }
+                
+                # Calculate relative path from data root for navigation
+                try:
+                    rel_path = item.relative_to(data_dir)
+                    entry["path"] = str(rel_path).replace("\\", "/")
+                except ValueError:
+                    entry["path"] = item.name
+                
+                # Add absolute path for use in YAML/manifests
+                entry["absolute_path"] = str(item.resolve()).replace("\\", "/")
+                
+                # Add file size for files
+                if item.is_file():
+                    try:
+                        entry["size"] = item.stat().st_size
+                    except OSError:
+                        entry["size"] = 0
+                
+                entries.append(entry)
+        except PermissionError:
+            raise HTTPException(status_code=403, detail="Permission denied accessing directory")
+        
+        # Calculate parent path
+        parent_path = None
+        if requested_dir != data_dir:
+            try:
+                parent = requested_dir.parent
+                if parent >= data_dir:
+                    parent_rel = parent.relative_to(data_dir)
+                    if str(parent_rel) != ".":
+                        parent_path = str(parent_rel).replace("\\", "/")
+            except ValueError:
+                pass
+        
+        # Get current path relative to data root
+        try:
+            current_rel = requested_dir.relative_to(data_dir)
+            current_path = str(current_rel).replace("\\", "/") if str(current_rel) != "." else ""
+        except ValueError:
+            current_path = ""
+        
+        return JSONResponse({
+            "current_path": current_path,
+            "parent_path": parent_path,
+            "entries": entries,
+        })
+    
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(f"Error browsing data directory for project {project_id}")
+        raise HTTPException(status_code=500, detail=f"Failed to browse directory: {str(exc)}") from exc
+
+
+@app.post("/projects/{project_id}/data-browser/create-folder")
+async def create_folder(project_id: str, payload: dict = Body(...)) -> JSONResponse:
+    """
+    Create a new folder in the project's data directory.
+    
+    Payload:
+    {
+        "path": str (parent directory path, relative to data folder),
+        "folder_name": str (name of the new folder)
+    }
+    """
+    try:
+        path = payload.get("path", "")
+        folder_name = payload.get("folder_name")
+        
+        if not folder_name:
+            raise HTTPException(status_code=400, detail="folder_name is required")
+        
+        # Validate folder name (no path separators, no special chars)
+        if "/" in folder_name or "\\" in folder_name or ".." in folder_name:
+            raise HTTPException(status_code=400, detail="Invalid folder name")
+        
+        # Get the base data directory
+        data_dir = get_project_data_dir(project_id).resolve()
+        
+        # Determine parent directory
+        if path:
+            path = path.strip("/")
+            parent_dir = (data_dir / path).resolve()
+        else:
+            parent_dir = data_dir
+        
+        # Security check
+        if not str(parent_dir).startswith(str(data_dir)):
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        if not parent_dir.exists():
+            raise HTTPException(status_code=404, detail="Parent directory not found")
+        
+        # Create the new folder
+        new_folder = parent_dir / folder_name
+        
+        if new_folder.exists():
+            raise HTTPException(status_code=409, detail="Folder already exists")
+        
+        new_folder.mkdir(parents=False, exist_ok=False)
+        
+        logger.info(f"Created folder: {new_folder}")
+        
+        return JSONResponse({
+            "status": "success",
+            "folder_name": folder_name,
+            "path": str(new_folder.relative_to(data_dir)).replace("\\", "/")
+        })
+    
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(f"Error creating folder")
+        raise HTTPException(status_code=500, detail=f"Failed to create folder: {str(exc)}") from exc
+
+
+@app.delete("/projects/{project_id}/data-browser/delete-folder")
+async def delete_folder(project_id: str, path: str = Query(...)) -> JSONResponse:
+    """
+    Delete a folder from the project's data directory.
+    
+    Query Parameters:
+    - path: folder path relative to data folder
+    """
+    try:
+        if not path:
+            raise HTTPException(status_code=400, detail="path is required")
+        
+        # Get the base data directory
+        data_dir = get_project_data_dir(project_id).resolve()
+        
+        # Get the folder to delete
+        path = path.strip("/")
+        folder_to_delete = (data_dir / path).resolve()
+        
+        # Security checks
+        if not str(folder_to_delete).startswith(str(data_dir)):
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        if folder_to_delete == data_dir:
+            raise HTTPException(status_code=403, detail="Cannot delete data root directory")
+        
+        if not folder_to_delete.exists():
+            raise HTTPException(status_code=404, detail="Folder not found")
+        
+        if not folder_to_delete.is_dir():
+            raise HTTPException(status_code=400, detail="Path is not a directory")
+        
+        # Delete the folder and all its contents
+        import shutil
+        shutil.rmtree(folder_to_delete)
+        
+        logger.info(f"Deleted folder: {folder_to_delete}")
+        
+        return JSONResponse({
+            "status": "success",
+            "message": "Folder deleted successfully"
+        })
+    
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(f"Error deleting folder")
+        raise HTTPException(status_code=500, detail=f"Failed to delete folder: {str(exc)}") from exc
+
+
 @app.on_event("startup")
 async def startup_event():
     """Load jobs store on application startup."""

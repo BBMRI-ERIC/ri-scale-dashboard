@@ -327,6 +327,17 @@
                         class="mb-3"
                         style="margin-left: 12px;"
                       />
+                      <!-- File input with dialog for path fields -->
+                      <FileInput
+                        v-else-if="shouldShowFileDialogForChainInput(sub)"
+                        v-model="selectedStage.config.userInputs[sub.name]"
+                        :label="sub.label || sub.name"
+                        :placeholder="sub.default || 'Browse or enter path...'"
+                        :hint="sub.helpText"
+                        :project-id="projectsStore.selectedProjectId"
+                        style="margin-left: 12px;"
+                        class="mb-3"
+                      />
                       <!-- Regular text input for non-registry fields -->
                       <v-text-field
                         v-else
@@ -380,9 +391,20 @@
                       
                       <template v-for="(paramConfig, paramKey) in selectedStageConfig.params" :key="paramKey">
                         <div v-if="shouldShowParam(paramKey, paramConfig)" class="param-field mb-3">
-                          <!-- String fields -->
+                          <!-- String fields with file dialog -->
+                          <FileInput
+                            v-if="paramConfig.type === 'string' && shouldShowFileDialog(paramConfig)"
+                            v-model="selectedStage.config[paramKey]"
+                            :label="paramConfig.label"
+                            :placeholder="getParamPlaceholder(paramConfig)"
+                            :hint="paramConfig.helpText"
+                            :required="isParamRequiredForStage(paramKey, paramConfig)"
+                            :project-id="projectsStore.selectedProjectId"
+                          />
+                          
+                          <!-- Regular string fields -->
                           <v-text-field
-                            v-if="paramConfig.type === 'string'"
+                            v-else-if="paramConfig.type === 'string'"
                             v-model="selectedStage.config[paramKey]"
                             :label="paramConfig.label"
                             :hint="paramConfig.helpText"
@@ -436,9 +458,19 @@
                               <v-expansion-panel-text>
                                 <template v-for="(subParamConfig, subParamKey) in getObjectSubParams(paramConfig)" :key="subParamKey">
                                   <div v-if="shouldShowParam(subParamKey, subParamConfig)" class="mb-3">
-                                    <!-- String sub-fields -->
+                                    <!-- String sub-fields with file dialog -->
+                                    <FileInput
+                                      v-if="subParamConfig.type === 'string' && shouldShowFileDialog(subParamConfig)"
+                                      v-model="getOrCreateNestedParam(paramKey)[subParamKey]"
+                                      :label="subParamConfig.label"
+                                      :placeholder="getParamPlaceholder(subParamConfig)"
+                                      :hint="subParamConfig.helpText"
+                                      :project-id="projectsStore.selectedProjectId"
+                                    />
+                                    
+                                    <!-- Regular string sub-fields -->
                                     <v-text-field
-                                      v-if="subParamConfig.type === 'string'"
+                                      v-else-if="subParamConfig.type === 'string'"
                                       v-model="getOrCreateNestedParam(paramKey)[subParamKey]"
                                       :label="subParamConfig.label"
                                       :hint="subParamConfig.helpText"
@@ -502,6 +534,7 @@ import { ref, computed, watch } from 'vue'
 import yaml from 'js-yaml'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import AppHeader from '@/components/layout/AppHeader.vue'
+import FileInput from '@/components/common/FileInput.vue'
 import { STEP_TYPES_CONFIG, getStepTypeConfig } from '@/configs/step_types_config.js'
 import { useProjectsStore } from '@/stores/projects.js'
 import { useAuthStore } from '@/stores/auth.js'
@@ -649,7 +682,15 @@ const selectedChainUserInputs = computed(() => {
   if (!def) return []
   const subs = def.substitutions || []
   // include all substitutions (form-scoped and per_row) so column name selectors are shown
-  return subs.map(s => ({ name: s.name, label: s.label, default: s.default, helpText: s.help_text, scope: s.scope }))
+  return subs.map(s => ({ 
+    name: s.name, 
+    label: s.label, 
+    default: s.default, 
+    helpText: s.help_text, 
+    scope: s.scope,
+    type: s.type,
+    open_file_dialog: s.open_file_dialog
+  }))
 })
 
 // Expose step parameter exposures that are visible and resolved at form time
@@ -943,6 +984,51 @@ function getParamPlaceholder(paramConfig) {
     return String(paramConfig.default)
   }
   return ''
+}
+
+// Helper: Check if a parameter should show file dialog
+function shouldShowFileDialog(paramConfig) {
+  return paramConfig.open_file_dialog === true
+}
+
+// Helper: Check if a chain input should show file dialog
+function shouldShowFileDialogForChainInput(input) {
+  // Check if the input is marked for file dialog (for substitutions)
+  if (input.open_file_dialog === true) return true
+  
+  // Check if this is a substitution with string type that looks like a path
+  if (input.isSubstitution && input.type === 'string' && input.open_file_dialog === true) {
+    return true
+  }
+  
+  // Check if this is an exposure that references a parameter with file dialog
+  if (input.isExposure && input.stepId && input.param) {
+    const chainDef = selectedChainDefinition.value
+    if (!chainDef) return false
+    
+    // Find the corresponding step in the chain
+    const chainSteps = chainDef.chain || []
+    const step = chainSteps.find(s => s.id === input.stepId)
+    if (!step) return false
+    
+    // Get the step type config
+    const stepTypeConfig = getStepTypeConfig(step.type)
+    if (!stepTypeConfig) return false
+    
+    // Navigate to the parameter (handle nested paths like 'columns.column_name')
+    const paramParts = input.param.split('.')
+    let paramConfig = stepTypeConfig.params
+    
+    for (const part of paramParts) {
+      if (!paramConfig || typeof paramConfig !== 'object') return false
+      paramConfig = paramConfig[part]
+    }
+    
+    // Check if this parameter has open_file_dialog
+    return paramConfig?.open_file_dialog === true
+  }
+  
+  return false
 }
 
 // Helper: Get sub-parameters for object type fields
