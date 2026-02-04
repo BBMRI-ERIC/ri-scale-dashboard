@@ -135,6 +135,15 @@ class Source:
     def get_data(self) -> Optional[LazyDataFrame]:
         """Get the data from the source."""
         return self._data
+
+    def get_column_names(self) -> List[str]:
+        """Get column names from the underlying data (if available)."""
+        if self._data is None:
+            return []
+        columns = getattr(self._data, "columns", None)
+        if columns is None:
+            return []
+        return list(columns)
         
 
 if __name__ == "__main__":

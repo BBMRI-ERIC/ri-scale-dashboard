@@ -267,6 +267,8 @@ step_types:
         type: "string"
         required: true
         default: "slide_id"
+        use_column_selector: true
+        column_source_field: "left_source_name"
         help_text: "Column name in the left source to join on"
         examples: ["slide_id", "case_id", "patient_id", "id"]
 
@@ -275,6 +277,8 @@ step_types:
         type: "string"
         required: true
         default: "slide_id"
+        use_column_selector: true
+        column_source_field: "right_source_name"
         help_text: "Column name in the right source to join on"
         examples: ["slide_id", "case_id", "patient_id", "id"]
 
@@ -443,7 +447,6 @@ command_chains:
         source:
           step_id: run_dicom
           param: input_source_name
-          column: ""
 
       - name: slide_id
         label: "Slide ID Column (Input Source)"
@@ -454,4 +457,3 @@ command_chains:
         source:
           step_id: run_dicom
           param: input_source_name
-          column: ""

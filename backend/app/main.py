@@ -155,41 +155,33 @@ def _run_data_preparation_job(job_id: str, simulated: bool) -> None:
                 manifest_data = yaml.safe_load(fh)
 
             manifest_data["simulated"] = simulated
-
-            temp_manifest = manifest_path.parent / f"temp_{job_id}_{manifest_path.name}"
-            with temp_manifest.open("w", encoding="utf-8") as fh:
-                yaml.safe_dump(manifest_data, fh, sort_keys=False, allow_unicode=False)
+            manifest_yaml_string_raw = yaml.safe_dump(manifest_data, sort_keys=False, allow_unicode=False)
 
             _append_job_log(job_id, f"[{datetime.utcnow().isoformat()}] INFO - Starting DPS service execution\n")
             _append_job_log(job_id, f"[{datetime.utcnow().isoformat()}] INFO - Mode: {'Simulated' if simulated else 'Production'}\n")
             _append_job_log(job_id, f"[{datetime.utcnow().isoformat()}] INFO - Manifest: {manifest_id}\n")
             _append_job_log(job_id, f"[{datetime.utcnow().isoformat()}] INFO - Project: {project_id}\n")
 
-            try:
-                service = DataPreparationForExploitationService(str(temp_manifest))
-                service.run()
+            service = DataPreparationForExploitationService(manifest_yaml_string_raw)
+            service.run()
 
-                _append_job_log(job_id, f"[{datetime.utcnow().isoformat()}] INFO - DPS service completed successfully\n")
+            _append_job_log(job_id, f"[{datetime.utcnow().isoformat()}] INFO - DPS service completed successfully\n")
 
-                updates = {
-                    "status": "completed",
-                    "completedAt": datetime.utcnow().isoformat()
-                }
+            updates = {
+                "status": "completed",
+                "completedAt": datetime.utcnow().isoformat()
+            }
 
-                started_at = job.get("startedAt")
-                if started_at:
-                    start = datetime.fromisoformat(started_at)
-                    end = datetime.fromisoformat(updates["completedAt"])
-                    duration = end - start
-                    hours, remainder = divmod(int(duration.total_seconds()), 3600)
-                    minutes, _ = divmod(remainder, 60)
-                    updates["runtime"] = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+            started_at = job.get("startedAt")
+            if started_at:
+                start = datetime.fromisoformat(started_at)
+                end = datetime.fromisoformat(updates["completedAt"])
+                duration = end - start
+                hours, remainder = divmod(int(duration.total_seconds()), 3600)
+                minutes, _ = divmod(remainder, 60)
+                updates["runtime"] = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
-                _update_job(job_id, updates)
-
-            finally:
-                if temp_manifest.exists():
-                    temp_manifest.unlink()
+            _update_job(job_id, updates)
 
         except Exception as exec_exc:
             logger.exception("DPS execution failed")
@@ -264,18 +256,9 @@ async def run_dps(manifest_path: str = Form(...), simulated: bool = Form(False))
         # Add or update simulated flag in manifest
         manifest_data["simulated"] = simulated
         
-        # Create temporary manifest file with simulated flag
-        temp_manifest = manifest_file.parent / f"temp_{manifest_file.name}"
-        with temp_manifest.open("w", encoding="utf-8") as fh:
-            yaml.safe_dump(manifest_data, fh, sort_keys=False, allow_unicode=False)
-        
-        try:
-            service = DataPreparationForExploitationService(str(temp_manifest))
-            service.run()
-        finally:
-            # Clean up temporary file
-            if temp_manifest.exists():
-                temp_manifest.unlink()
+        manifest_yaml_string_raw = yaml.safe_dump(manifest_data, sort_keys=False, allow_unicode=False)
+        service = DataPreparationForExploitationService(manifest_yaml_string_raw)
+        service.run()
     except Exception as exc:
         logger.exception("DPS run failed")
         raise HTTPException(status_code=500, detail=f"DPS execution failed: {exc}") from exc
@@ -813,6 +796,43 @@ async def update_pipeline(payload: dict = Body(...)) -> JSONResponse:
     except Exception as exc:
         logger.exception("Error updating pipeline")
         raise HTTPException(status_code=500, detail=f"Failed to update pipeline: {str(exc)}") from exc
+
+
+@app.post("/pipeline/source-columns")
+async def get_pipeline_source_columns(payload: dict = Body(...)) -> JSONResponse:
+    """Get column names for sources in a manifest by initializing the DPS service."""
+    if not HAS_DPS_SERVICE:
+        raise HTTPException(status_code=503, detail="DPS service not available")
+
+    try:
+        manifest = payload.get("manifest")
+        source_name = payload.get("source_name")
+
+        if not isinstance(manifest, dict):
+            raise HTTPException(status_code=400, detail="manifest must be an object")
+
+        manifest_yaml_string_raw = yaml.safe_dump(manifest, sort_keys=False, allow_unicode=False)
+        service = DataPreparationForExploitationService(manifest_yaml_string_raw)
+        sources = service.get_sources()
+
+        if source_name:
+            columns = service.get_source_columns(source_name) if source_name in sources else []
+            return JSONResponse({
+                "status": "success",
+                "sources": {source_name: columns}
+            })
+
+        results = {name: service.get_source_columns(name) for name in sources.keys()}
+        return JSONResponse({
+            "status": "success",
+            "sources": results
+        })
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Error retrieving source columns")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve source columns: {str(exc)}") from exc
 
 
 @app.get("/manifests")

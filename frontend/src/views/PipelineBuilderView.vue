@@ -139,6 +139,10 @@
         <v-row>
           <!-- Stage Library Panel -->
           <v-col cols="12" md="3">
+            <!-- Available Sources Panel -->
+            <SourcesPanel :sources="availableSources" class="mb-4" />
+            
+            <!-- Stage Library -->
             <v-card class="glass" :elevation="0">
               <v-card-title class="text-subtitle-1">Stage Library</v-card-title>
               <v-divider />
@@ -327,6 +331,18 @@
                         class="mb-3"
                         style="margin-left: 12px;"
                       />
+                      <!-- Column selector for column type substitutions -->
+                      <ColumnSelector
+                        v-else-if="sub.type === 'column'"
+                        v-model="selectedStage.config.userInputs[sub.name]"
+                        :label="sub.label || sub.name"
+                        :hint="sub.helpText"
+                        :source-name="getChainColumnSourceName(sub)"
+                        :available-sources="availableSources"
+                        :placeholder="sub.default || 'Select column...'"
+                        class="mb-3"
+                        style="margin-left: 12px;"
+                      />
                       <!-- File input with dialog for path fields -->
                       <FileInput
                         v-else-if="shouldShowFileDialogForChainInput(sub)"
@@ -391,13 +407,24 @@
                       
                       <template v-for="(paramConfig, paramKey) in selectedStageConfig.params" :key="paramKey">
                         <div v-if="shouldShowParam(paramKey, paramConfig)" class="param-field mb-3">
+                          <!-- String fields with column selector -->
+                          <ColumnSelector
+                            v-if="paramConfig.type === 'string' && shouldShowColumnSelector(paramConfig)"
+                            v-model="selectedStage.config[paramKey]"
+                            :label="paramConfig.label"
+                            :hint="paramConfig.help_text || paramConfig.helpText"
+                            :source-name="getColumnSelectorSourceName(paramConfig)"
+                            :available-sources="availableSources"
+                            :placeholder="getParamPlaceholder(paramConfig)"
+                          />
+                          
                           <!-- String fields with file dialog -->
                           <FileInput
-                            v-if="paramConfig.type === 'string' && shouldShowFileDialog(paramConfig)"
+                            v-else-if="paramConfig.type === 'string' && shouldShowFileDialog(paramConfig)"
                             v-model="selectedStage.config[paramKey]"
                             :label="paramConfig.label"
                             :placeholder="getParamPlaceholder(paramConfig)"
-                            :hint="paramConfig.helpText"
+                            :hint="paramConfig.help_text || paramConfig.helpText"
                             :required="isParamRequiredForStage(paramKey, paramConfig)"
                             :project-id="projectsStore.selectedProjectId"
                           />
@@ -407,7 +434,7 @@
                             v-else-if="paramConfig.type === 'string'"
                             v-model="selectedStage.config[paramKey]"
                             :label="paramConfig.label"
-                            :hint="paramConfig.helpText"
+                            :hint="paramConfig.help_text || paramConfig.helpText"
                             :placeholder="getParamPlaceholder(paramConfig)"
                             :required="isParamRequiredForStage(paramKey, paramConfig)"
                             variant="outlined"
@@ -420,7 +447,7 @@
                             v-else-if="paramConfig.type === 'boolean'"
                             v-model="selectedStage.config[paramKey]"
                             :label="paramConfig.label"
-                            :hint="paramConfig.helpText"
+                            :hint="paramConfig.help_text || paramConfig.helpText"
                             color="primary"
                             persistent-hint
                             hide-details="auto"
@@ -431,7 +458,7 @@
                             v-else-if="paramConfig.type === 'enum'"
                             v-model="selectedStage.config[paramKey]"
                             :label="paramConfig.label"
-                            :hint="paramConfig.helpText"
+                            :hint="paramConfig.help_text || paramConfig.helpText"
                             :items="getEnumItemsForField(paramConfig)"
                             item-title="label"
                             item-value="value"
@@ -446,25 +473,36 @@
                             <v-expansion-panel>
                               <v-expansion-panel-title>
                                 {{ paramConfig.label }}
-                                <template v-if="paramConfig.helpText">
+                                <template v-if="paramConfig.help_text || paramConfig.helpText">
                                   <v-tooltip location="top">
                                     <template v-slot:activator="{ props }">
                                       <v-icon v-bind="props" size="small" class="ml-2">mdi-help-circle-outline</v-icon>
                                     </template>
-                                    {{ paramConfig.helpText }}
+                                    {{ paramConfig.help_text || paramConfig.helpText }}
                                   </v-tooltip>
                                 </template>
                               </v-expansion-panel-title>
                               <v-expansion-panel-text>
                                 <template v-for="(subParamConfig, subParamKey) in getObjectSubParams(paramConfig)" :key="subParamKey">
                                   <div v-if="shouldShowParam(subParamKey, subParamConfig)" class="mb-3">
+                                    <!-- String sub-fields with column selector -->
+                                    <ColumnSelector
+                                      v-if="subParamConfig.type === 'string' && shouldShowColumnSelector(subParamConfig)"
+                                      v-model="getOrCreateNestedParam(paramKey)[subParamKey]"
+                                      :label="subParamConfig.label"
+                                      :hint="subParamConfig.help_text || subParamConfig.helpText"
+                                      :source-name="getColumnSelectorSourceName(subParamConfig)"
+                                      :available-sources="availableSources"
+                                      :placeholder="getParamPlaceholder(subParamConfig)"
+                                    />
+                                    
                                     <!-- String sub-fields with file dialog -->
                                     <FileInput
-                                      v-if="subParamConfig.type === 'string' && shouldShowFileDialog(subParamConfig)"
+                                      v-else-if="subParamConfig.type === 'string' && shouldShowFileDialog(subParamConfig)"
                                       v-model="getOrCreateNestedParam(paramKey)[subParamKey]"
                                       :label="subParamConfig.label"
                                       :placeholder="getParamPlaceholder(subParamConfig)"
-                                      :hint="subParamConfig.helpText"
+                                      :hint="subParamConfig.help_text || subParamConfig.helpText"
                                       :project-id="projectsStore.selectedProjectId"
                                     />
                                     
@@ -473,7 +511,7 @@
                                       v-else-if="subParamConfig.type === 'string'"
                                       v-model="getOrCreateNestedParam(paramKey)[subParamKey]"
                                       :label="subParamConfig.label"
-                                      :hint="subParamConfig.helpText"
+                                      :hint="subParamConfig.help_text || subParamConfig.helpText"
                                       :placeholder="getParamPlaceholder(subParamConfig)"
                                       variant="outlined"
                                       density="compact"
@@ -485,7 +523,7 @@
                                       v-else-if="subParamConfig.type === 'boolean'"
                                       v-model="getOrCreateNestedParam(paramKey)[subParamKey]"
                                       :label="subParamConfig.label"
-                                      :hint="subParamConfig.helpText"
+                                      :hint="subParamConfig.help_text || subParamConfig.helpText"
                                       color="primary"
                                       persistent-hint
                                       hide-details="auto"
@@ -535,10 +573,13 @@ import yaml from 'js-yaml'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import AppHeader from '@/components/layout/AppHeader.vue'
 import FileInput from '@/components/common/FileInput.vue'
+import ColumnSelector from '@/components/common/ColumnSelector.vue'
+import SourceColumnSelector from '@/components/common/SourceColumnSelector.vue'
+import SourcesPanel from '@/components/pipeline/SourcesPanel.vue'
 import { STEP_TYPES_CONFIG, getStepTypeConfig } from '@/configs/step_types_config.js'
 import { useProjectsStore } from '@/stores/projects.js'
 import { useAuthStore } from '@/stores/auth.js'
-import { savePipeline, listPipelines, loadPipeline, updatePipeline } from '@/services/pipelines.js'
+import { savePipeline, listPipelines, loadPipeline, updatePipeline, getSourceColumns } from '@/services/pipelines.js'
 
 const projectsStore = useProjectsStore()
 const authStore = useAuthStore()
@@ -551,6 +592,7 @@ const yamlDirty = ref(false)
 const isSyncingFromStages = ref(false)
 const isSyncingFromYaml = ref(false)
 let yamlParseTimer = null
+let sourceColumnsTimer = null
 
 // Save dialog state
 const saveDialogOpen = ref(false)
@@ -636,6 +678,21 @@ const stages = ref([])
 // Fields with register_id add their values here, fields with use_registry_source read from here
 const fieldRegistry = ref({})
 
+// Source tracking: Extract available data sources from pipeline steps
+// This provides column name suggestions for fields that reference source columns
+const sourceColumnCache = ref({})
+
+const availableSources = computed(() => {
+  // Get all registered sources (sources that have register_id in config)
+  const registeredSourceNames = getRegisteredValues('sources')
+  
+  // Build source objects with columns from cache
+  return registeredSourceNames.map(name => ({
+    source_name: name,
+    columns: sourceColumnCache.value[name] || []
+  }))
+})
+
 // Helper to add a value to the registry
 function registerFieldValue(registryId, value) {
   if (!registryId || !value) return
@@ -656,6 +713,39 @@ function getRegisteredValues(registryId) {
 // Helper to clear the registry (useful when loading a new pipeline)
 function clearRegistry() {
   fieldRegistry.value = {}
+}
+
+async function refreshSourceColumnsFromServer() {
+  const registeredSourceNames = getRegisteredValues('sources')
+  
+  if (registeredSourceNames.length === 0) {
+    sourceColumnCache.value = {}
+    return
+  }
+
+  try {
+    const manifest = buildManifestFromStages()
+    const response = await getSourceColumns(manifest)
+    const responseSources = response?.sources || {}
+    
+    // Update cache with columns for ALL registered sources
+    const nextCache = {}
+    registeredSourceNames.forEach(name => {
+      nextCache[name] = responseSources[name] || []
+    })
+    sourceColumnCache.value = nextCache
+  } catch (err) {
+    console.error('Failed to refresh source columns:', err)
+  }
+}
+
+function scheduleSourceColumnsRefresh() {
+  if (sourceColumnsTimer) {
+    clearTimeout(sourceColumnsTimer)
+  }
+  sourceColumnsTimer = setTimeout(() => {
+    refreshSourceColumnsFromServer()
+  }, 400)
 }
 
 // Selected stage for configuration
@@ -689,7 +779,8 @@ const selectedChainUserInputs = computed(() => {
     helpText: s.help_text, 
     scope: s.scope,
     type: s.type,
-    open_file_dialog: s.open_file_dialog
+    open_file_dialog: s.open_file_dialog,
+    source: s.source // Source configuration for column type substitutions
   }))
 })
 
@@ -943,25 +1034,28 @@ function getEnumItemsForField(paramConfig) {
     }))
   }
   
-  // Otherwise use predefined enum values
-  return paramConfig.enumValues || []
+  // Otherwise use predefined enum values (support both snake_case and camelCase)
+  return paramConfig.enum_values || paramConfig.enumValues || []
 }
 
 // Helper: Check if a parameter should be shown based on conditional logic
 function shouldShowParam(paramKey, paramConfig) {
-  if (!paramConfig.conditionalOn) return true
+  const conditionalField = paramConfig.conditional_on || paramConfig.conditionalOn
+  if (!conditionalField) return true
   
-  const conditionalValue = selectedStage.value?.config?.[paramConfig.conditionalOn]
-  return conditionalValue === paramConfig.conditionalValue
+  const conditionalValue = selectedStage.value?.config?.[conditionalField]
+  const expectedValue = paramConfig.conditional_value || paramConfig.conditionalValue
+  return conditionalValue === expectedValue
 }
 
 // Helper: Check if a parameter is required
 function isParamRequiredForStage(paramKey, paramConfig) {
   if (paramConfig.required === true) return true
   
-  if (paramConfig.requiredWhen) {
+  const requiredWhen = paramConfig.required_when || paramConfig.requiredWhen
+  if (requiredWhen) {
     // Simple evaluation for common cases
-    const condition = paramConfig.requiredWhen
+    const condition = requiredWhen
     const formState = selectedStage.value?.config || {}
     
     // Parse conditions like "mode == 'discovery'" or "execution_mode == 'per_row'"
@@ -989,6 +1083,21 @@ function getParamPlaceholder(paramConfig) {
 // Helper: Check if a parameter should show file dialog
 function shouldShowFileDialog(paramConfig) {
   return paramConfig.open_file_dialog === true
+}
+
+// Helper: Check if a parameter should use column selector
+function shouldShowColumnSelector(paramConfig) {
+  return paramConfig.use_column_selector === true
+}
+
+// Helper: Get the source name for a column selector field
+function getColumnSelectorSourceName(paramConfig) {
+  // If the parameter specifies a source field to read from, use that
+  if (paramConfig.column_source_field) {
+    return selectedStage.value?.config?.[paramConfig.column_source_field]
+  }
+  // Otherwise, try to infer from input_source_name parameter
+  return selectedStage.value?.config?.input_source_name
 }
 
 // Helper: Check if a chain input should show file dialog
@@ -1029,6 +1138,29 @@ function shouldShowFileDialogForChainInput(input) {
   }
   
   return false
+}
+
+// Helper: Get the source name for a chain column substitution
+function getChainColumnSourceName(substitution) {
+  if (!substitution || !substitution.source) return ''
+  
+  const sourceConfig = substitution.source
+  
+  // Find the exposed parameter that contains the source name
+  const exposures = selectedChainDefinition.value?.step_param_exposure || []
+  const sourceExposure = exposures.find(
+    e => e.step_id === sourceConfig.step_id && e.param === sourceConfig.param
+  )
+  
+  if (!sourceExposure) return ''
+  
+  // Build the key for the userInputs
+  const stepId = sourceExposure.step_id
+  const param = sourceExposure.param || sourceExposure.param_name || 'param'
+  const key = `${stepId}.${param.replace(/\./g, '_')}`
+  
+  // Get the value from userInputs
+  return selectedStage.value?.config?.userInputs?.[key] || ''
 }
 
 // Helper: Get sub-parameters for object type fields
@@ -1597,6 +1729,16 @@ watch(
     rebuildRegistryFromStages()
   },
   { deep: true, immediate: false }
+)
+
+// Watch for changes to stages and refresh source columns from backend (CSV headers)
+watch(
+  stages,
+  () => {
+    if (isSyncingFromYaml.value) return
+    scheduleSourceColumnsRefresh()
+  },
+  { deep: true, immediate: true }
 )
 
 // Helper: Rebuild the registry from all stages

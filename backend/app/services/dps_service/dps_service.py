@@ -13,7 +13,8 @@ from step.custom_command import CustomCommandStep
 import dpsdataset.loaders as loaders
 from step.example_dps_step import ExampleDPSStep
 from step.join import JoinStep
-from dpsdataset.source import FileDiscoveryStrategy, CSVFileStrategy, Source
+from dpsdataset.source import FileDiscoveryStrategy, CSVFileStrategy, Source, DataSourceStrategy
+from dpsdataset.lazy_dataframe import LazyDataFrame
 import re
 
 logger = logging.getLogger("dpsService")
@@ -28,6 +29,25 @@ def parse_args(argv=None):
         parser.error(f"Manifest path not found: {args.manifest}")
     return args
 
+class PreCalculatedColumnsStrategy(DataSourceStrategy):
+    """Strategy that returns pre-calculated columns without loading data."""
+    def __init__(self, columns: list[str]):
+        """
+        Initialize with pre-calculated columns.
+        Args:
+            columns (list[str]): List of column names.
+        """
+        super().__init__(type="pre_calculated")
+        self.columns = columns
+    
+    def get_data(self) -> LazyDataFrame:
+        """Return a LazyDataFrame with column names but no data."""
+        # Create an empty dataframe with just the columns
+        empty_data = {col: [] for col in self.columns}
+        return LazyDataFrame(empty_data)
+
+
+
 class DataPreparationForExploitationService:
     """
     The Data Preparation for Exploitation Service (DPS) is a user-invoked service that prepares datasets
@@ -40,15 +60,15 @@ class DataPreparationForExploitationService:
     ensures that data ingestion is harmonised across domains and that every dataset can be used
     directly in workflows without further ad-hoc manipulation.
     """
-    def __init__(self, manifest_path:str):
+    def __init__(self, manifest_yaml_string_raw:str):
         """
         Initialize the DPS with a manifest file.
         Args:
-            manifest_path (str): Path to the manifest YAML file defining sources and steps.
+            manifest_yaml_string_raw (str): Raw YAML string defining sources and steps.
         """
-        self.manifest_path:str = manifest_path
+        self.manifest_yaml_string_raw:str = manifest_yaml_string_raw
         self.pipeline: DPSPipeline = DPSPipeline()
-        self.__parse_manifest__()
+        self.__parse_manifest__(manifest_yaml_string_raw)
         
     # helper to add a join step
     def __handle_join__(self, params) -> bool:
@@ -86,6 +106,23 @@ class DataPreparationForExploitationService:
         ))
 
         self.sources[output_source_name] = output_source
+        
+        # Pre-calculate output columns based on input sources
+        left_columns = left_source.get_column_names()
+        right_columns = right_source.get_column_names()
+        merged_columns = list(dict.fromkeys(left_columns + right_columns))
+        
+        # Update the output source with pre-calculated columns
+        output_source.data_source_strategy = PreCalculatedColumnsStrategy(merged_columns)
+        output_source._data = output_source.data_source_strategy.get_data()
+        
+        logger.info(
+            "Pre-calculated %d columns for join output '%s': %s",
+            len(merged_columns),
+            output_source_name,
+            merged_columns
+        )
+        
         return True
 
     # helper to add the example DPS step
@@ -210,68 +247,66 @@ class DataPreparationForExploitationService:
 
         return True
         
-    def __parse_manifest__(self):
+    def __parse_manifest__(self, manifest_yaml_string_raw: str):
         """
         Parse the manifest YAML file to initialize sources and steps.
         """
         
-        logger.info("Parsing manifest: %s", self.manifest_path)
-        with open(self.manifest_path, 'r') as f:
-            manifest = yaml.safe_load(f) 
-            manifest_id = manifest.get('manifest_id', {})
-            created_by = manifest.get('created_by', '')
-            created_at = manifest.get('created_at', '')
-            logger.info("Manifest ID: %s, created by: %s at %s",
+        logger.info("Parsing manifest YAML string")
+        manifest = yaml.safe_load(manifest_yaml_string_raw) 
+        manifest_id = manifest.get('manifest_id', {})
+        created_by = manifest.get('created_by', '')
+        created_at = manifest.get('created_at', '')
+        logger.info("Manifest ID: %s, created by: %s at %s",
                         manifest_id, created_by, created_at)
             
-            simulated = manifest.get('simulated', True)
-            if simulated:
-                logger.info("Running in SIMULATED mode.")
-                self.pipeline.simulated = True
-            else:
-                logger.info("Running in PRODUCTION mode.")
-                self.pipeline.simulated = False
-            
-            # defined_sources = manifest.get('sources', [])
-            self.sources: dict[str, Source] = {}
+        simulated = manifest.get('simulated', True)
+        if simulated:
+            logger.info("Running in SIMULATED mode.")
+            self.pipeline.simulated = True
+        else:
+            logger.info("Running in PRODUCTION mode.")
+            self.pipeline.simulated = False
+        
+        # defined_sources = manifest.get('sources', [])
+        self.sources: dict[str, Source] = {}
 
         
         
         # -----------------------------------------------------------------------------------------
         # Parse and add DPS steps and their intermediate data source results to the pipeline
         # -----------------------------------------------------------------------------------------
-            steps = manifest.get('dps_steps', manifest.get('job_steps', []))
-            for step in steps:
-                step_name = step.get('step_name', '')
-                step_type = step.get('type', '')
-                enabled = step.get('enabled', True)
-                params = step.get('params', {})
-                
-                if not enabled:
-                    logger.info("Skipping disabled step: \"%s\"", step_name)
-                    continue
+        steps = manifest.get('dps_steps', manifest.get('job_steps', []))
+        for step in steps:
+            step_name = step.get('step_name', '')
+            step_type = step.get('type', '')
+            enabled = step.get('enabled', True)
+            params = step.get('params', {})
+            
+            if not enabled:
+                logger.info("Skipping disabled step: \"%s\"", step_name)
+                continue
 
-                match step_type:
-                    case 'load':
-                        if not self.__handle_load__(params):
-                            continue
-                        logger.info("Added Source loader: \"%s\"", step_name)
-                    case 'join':
-                        if not self.__handle_join__(params):
-                            continue
-                        logger.info("Added join step: \"%s\"", step_name)
-                    case 'ExampleDPSStep':
-                        if not self.__handle_example__(params):
-                            continue
-                        logger.info("Added example DPS step: \"%s\"", step_name)
-                    case 'custom_command':
-                        if not self.__handle_custom__(params):
-                            continue
-                        #logger.warning("[POTENTIALLY INSECURE] Added custom step: \"%s\" (%s)", step_name, params.get('command', 'no command'))
-                        logger.info("Added custom command step: \"%s\" (%s)", step_name, params.get('command', 'no command'))
-                    case _:
-                        logger.error("Invalid step: \"%s\"", step_name)
-
+            match step_type:
+                case 'load':
+                    if not self.__handle_load__(params):
+                        continue
+                    logger.info("Added Source loader: \"%s\"", step_name)
+                case 'join':
+                    if not self.__handle_join__(params):
+                        continue
+                    logger.info("Added join step: \"%s\"", step_name)
+                case 'ExampleDPSStep':
+                    if not self.__handle_example__(params):
+                        continue
+                    logger.info("Added example DPS step: \"%s\"", step_name)
+                case 'custom_command':
+                    if not self.__handle_custom__(params):
+                        continue
+                    #logger.warning("[POTENTIALLY INSECURE] Added custom step: \"%s\" (%s)", step_name, params.get('command', 'no command'))
+                    logger.info("Added custom command step: \"%s\" (%s)", step_name, params.get('command', 'no command'))
+                case _:
+                    logger.error("Invalid step: \"%s\"", step_name)
 
     def run(self) -> bool:
         """
@@ -280,7 +315,7 @@ class DataPreparationForExploitationService:
             bool: True if the pipeline executed successfully, False otherwise.
         """
         
-        logger.info("Running DPS on manifest: %s", self.manifest_path)
+        logger.info("Running DPS on manifest YAML string")
         
         status = True
         while status:
@@ -289,11 +324,75 @@ class DataPreparationForExploitationService:
             logger.debug("Pipeline has %d steps left.", len(self.pipeline.steps))
         logger.info("DPS Pipeline execution completed.")
         return status
+    
+    def get_sources(self) -> dict[str, Source]:
+        """
+        Get the dictionary of data sources.
+        Returns:
+            dict[str, Source]: Dictionary of data sources by name.
+        """
+        return self.sources
+    
+    def get_pipeline(self) -> DPSPipeline:
+        """
+        Get the DPS pipeline instance.
+        Returns:
+            DPSPipeline: The DPS pipeline instance.
+        """
+        return self.pipeline
+    
+    def is_simulated(self) -> bool:
+        """
+        Check if the pipeline is running in simulated mode.
+        Returns:
+            bool: True if simulated, False otherwise.
+        """
+        return self.pipeline.simulated
+    
+    def set_simulated(self, simulated: bool):
+        """
+        Set the simulated mode for the pipeline.
+        Args:
+            simulated (bool): True to set simulated mode, False for production mode.
+        """
+        self.pipeline.simulated = simulated
+        
+    def get_source_columns(self, source_name: str) -> list[str]:
+        """
+        Get the column names of a specified data source.
+        Args:
+            source_name (str): The name of the data source.
+        Returns:
+            list[str]: List of column names in the data source.
+        """
+        source = self.sources.get(source_name, None)
+        if source is None:
+            logger.error("Source not found: %s", source_name)
+            return []
+        return source.get_column_names()
+
+
+def create_dps_service_by_path(path: str) -> DataPreparationForExploitationService:
+    """
+    Create a DPS service instance by loading a manifest from a file path.
+    Args:
+        path (str): The file path to the manifest YAML file.
+    Returns:
+        DataPreparationForExploitationService: An instance of the DPS service initialized with the manifest.
+    """
+    if not os.path.exists(path):
+        logger.error("Manifest path not found: %s", path)
+        raise FileNotFoundError(f"Manifest path not found: {path}")
+    
+    with open(path, 'r') as manifest_file:
+        manifest_yaml_string_raw = manifest_file.read()
+    
+    return DataPreparationForExploitationService(manifest_yaml_string_raw)
 
 
 if __name__ == "__main__":
-    if "RIScale" not in os.getcwd():
-        os.chdir("RIScale")
+    # if "RIScale" not in os.getcwd():
+    #     os.chdir("RIScale")
     
     args = parse_args()
     if args.verbose:
@@ -304,5 +403,11 @@ if __name__ == "__main__":
         logger.disabled = True
         
     logger.info("Arguments: %s", args)
-    dps = DataPreparationForExploitationService(args.manifest)
+    
+    with open(args.manifest, 'r') as manifest_file:
+        manifest_yaml_string_raw = manifest_file.read()
+    dps = DataPreparationForExploitationService(manifest_yaml_string_raw)
+    
+    if args.simulated is not None:
+        dps.set_simulated(args.simulated)
     dps.run()
