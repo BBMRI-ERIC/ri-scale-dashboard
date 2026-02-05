@@ -1,7 +1,6 @@
 import logging
 from dpsdataset.source import Source
 from step.step import DPSStep
-import step.example_dps_step
 
 logger = logging.getLogger(__name__)
 
@@ -13,9 +12,9 @@ class DPSPipeline:
     
     def __init__(self, steps: list[DPSStep] | None = None, simulated: bool = True):
         if steps:
-            self.steps: list.List[DPSStep] = steps
+            self.steps: list[DPSStep] = steps
         else:
-            self.steps: list.List[DPSStep] = []
+            self.steps: list[DPSStep] = []
             
         self.simulated = simulated
 
@@ -66,20 +65,22 @@ class DPSPipeline:
     
 
 if __name__ == "__main__":
+    from step.example_dps_step import ExampleDPSStep
+    
     logging.basicConfig(level=logging.INFO)
     pipeline = DPSPipeline()
     sources = {}
     
-    source_in = Source(source_name="example_source", type=None)
-    source_intermediate = Source(source_name="example_source_intermediate", type=None)
-    source_out = Source(source_name="example_source_final", type=None)
+    source_in = Source(source_name="example_source", data_source_strategy=None)
+    source_intermediate = Source(source_name="example_source_intermediate", data_source_strategy=None)
+    source_out = Source(source_name="example_source_final", data_source_strategy=None)
     
     sources[source_in.source_name] = source_in
     sources[source_intermediate.source_name] = source_intermediate
     sources[source_out.source_name] = source_out
     
-    pipeline.add_step(step.example_dps_step.ExampleDPSStep(input_source=source_in, output_source=source_intermediate))
-    pipeline.add_step(step.example_dps_step.ExampleDPSStep(input_source=source_intermediate, output_source=source_out))
+    pipeline.add_step(ExampleDPSStep(input_source=source_in, output_source=source_intermediate))
+    pipeline.add_step(ExampleDPSStep(input_source=source_intermediate, output_source=source_out))
     
     logger.info("DPS Pipeline initialized with %d steps.", len(pipeline.steps))
     

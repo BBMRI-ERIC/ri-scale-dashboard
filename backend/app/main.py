@@ -19,8 +19,8 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import yaml
 
-
-logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("dps_api")
 
 # Ensure the DPS service modules are importable when running from the app root
 BASE_DIR = Path(__file__).resolve().parent
@@ -34,9 +34,6 @@ try:
 except Exception as exc:  # pragma: no cover - defensive import guard
     HAS_DPS_SERVICE = False
     logger.warning(f"DPS service not available: {exc}. Pipeline execution will not work, but save/manifest endpoints will.")
-
-logger = logging.getLogger("dps_api")
-logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(title="RI Scale DPS Service", version="0.1.0")
 

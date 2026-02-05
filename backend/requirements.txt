@@ -4,10 +4,10 @@ pyyaml>=6.0
 python-multipart>=0.0.22
 
 #dps service
-pandas==2.2.3
 numpy==1.26.4
 traitlets==5.14.3
 Pillow==12.1.0
 openslide-bin==4.0.0.11
 openslide-python-==1.4.3
 wsidicomizer==0.24.0
+pandas>=2.0.0

@@ -276,7 +276,7 @@ class DataPreparationForExploitationService:
         # -----------------------------------------------------------------------------------------
         # Parse and add DPS steps and their intermediate data source results to the pipeline
         # -----------------------------------------------------------------------------------------
-        steps = manifest.get('dps_steps', manifest.get('job_steps', []))
+        steps = manifest.get('job_steps', [])
         for step in steps:
             step_name = step.get('step_name', '')
             step_type = step.get('type', '')
@@ -296,10 +296,6 @@ class DataPreparationForExploitationService:
                     if not self.__handle_join__(params):
                         continue
                     logger.info("Added join step: \"%s\"", step_name)
-                case 'ExampleDPSStep':
-                    if not self.__handle_example__(params):
-                        continue
-                    logger.info("Added example DPS step: \"%s\"", step_name)
                 case 'custom_command':
                     if not self.__handle_custom__(params):
                         continue

@@ -74,19 +74,59 @@ The dashboard acts as the **operational control plane** for RI-SCALE biomedical 
 
 ---
 
-## 🏗 Repository Structure (expected)
+## 🚀 Quick Start
+
+### Prerequisites
+- **Node.js** >= 18.x
+- **Python** >= 3.10
+- **pip** (Python package manager)
+
+### 1. Start the Backend (required for Pipeline Builder)
+
+```bash
+cd backend
+pip install -r requirements.txt
+cd app
+python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+The backend API will be available at `http://localhost:8000`
+
+### 2. Start the Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The dashboard will be available at `http://localhost:3000`
+
+### Test Credentials
+
+- **Username:** `test`
+- **Password:** `test`
+
+---
+
+## 🏗 Repository Structure
 
 ```text
 .
-├── dashboard/
-│   ├── frontend/        # UI components and views
-│   ├── backend/         # APIs and integration logic
-│   └── config/          # Environment and deployment configs
-├── docs/
-│   ├── architecture.md  # Dashboard & DEP architecture
-│   ├── workflows.md     # UC7 / UC8 workflows
-│   └── screenshots/     # Dashboard screenshots
-├── assets/
-│   └── diagrams/        # Architecture & workflow diagrams
+├── frontend/                # Vue.js 3 dashboard application
+│   ├── src/
+│   │   ├── views/           # Page components (Dashboard, Pipeline Builder, etc.)
+│   │   ├── components/      # Reusable UI components
+│   │   ├── services/        # API service layers
+│   │   └── stores/          # Pinia state management
+│   └── README.md            # Frontend documentation
+├── backend/                 # FastAPI backend service
+│   ├── app/
+│   │   ├── main.py          # API entry point
+│   │   └── services/
+│   │       └── dps_service/ # Data Preparation Service
+│   └── README.md            # Backend documentation
+├── configs/                 # Shared configuration
+│   └── step_types_config.yaml  # Pipeline step definitions
 ├── README.md
 └── LICENSE

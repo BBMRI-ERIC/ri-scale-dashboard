@@ -3,7 +3,12 @@
  * Handles API calls for saving and managing pipelines
  */
 
-const API_BASE_URL = 'http://localhost:8000'
+/**
+ * Get the API base URL from environment variables.
+ * In development, defaults to localhost:8000.
+ * Set VITE_DPS_API_URL in .env for production deployments.
+ */
+const API_BASE_URL = import.meta.env.VITE_DPS_API_URL || 'http://localhost:8000'
 
 /**
  * Save a pipeline to the backend

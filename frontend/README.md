@@ -31,7 +31,24 @@ npm install
 npm run dev
 ```
 
-The application will be available at `http://localhost:5173`
+The application will be available at `http://localhost:3000` (or `http://localhost:5173` depending on Vite config).
+
+### Backend Server (Required for Pipeline Builder)
+
+The **Pipeline Builder** feature requires the backend server to be running. See [backend/README.md](../backend/README.md) for setup instructions.
+
+**Quick start:**
+```bash
+# Terminal 1: Start backend
+cd backend
+pip install -r requirements.txt
+cd app
+python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+# Terminal 2: Start frontend
+cd frontend
+npm run dev
+```
 
 ### Build for Production
 
@@ -108,6 +125,7 @@ frontend/
 | `/negotiator` | Negotiator | Access request management and tracking |
 | `/datasets` | Datasets | View datasets across all projects with filtering |
 | `/transfers` | Data Transfers | Monitor data transfers between storage and HPC sites |
+| `/pipelines` | Pipeline Builder | Visual pipeline builder for data preparation workflows |
 | `/computations` | HPC Jobs | Manage and monitor HPC computation jobs |
 | `/models` | Model Hub | Browse and deploy AI models for pathology analysis |
 | `/resources` | Compute Quotas | Monitor storage and GPU hour quotas per project |
@@ -142,6 +160,14 @@ frontend/
 - Request wizard with dataset selection and justification
 - Status tracking (pending, in review, approved, rejected)
 
+### Pipeline Builder
+- **Visual Pipeline Designer**: Drag-and-drop interface for building data preparation workflows
+- **Stage Library**: Pre-configured step types (Data Loader, Run Command, Join)
+- **Command Chains**: Composite pipelines for common tasks (e.g., DICOM conversion)
+- **YAML Editor**: View and edit pipeline manifests directly
+- **Save/Load**: Persist pipelines per project to the backend
+- **Requires Backend**: The Pipeline Builder requires the backend server to be running on port 8000
+
 ## Test Credentials
 
 For development, use the following test credentials:
@@ -171,9 +197,13 @@ The application includes mock data for demonstration:
 
 ### Environment Variables
 
-Create a `.env` file in the frontend directory:
+Create a `.env.local` file in the frontend directory (see `.env.example`):
 
 ```env
+# DPS (Data Preparation Service) API URL for Pipeline Builder
+# Default: http://localhost:8000 (for local development)
+VITE_DPS_API_URL=http://localhost:8000
+
 # API Base URL (when backend is available)
 VITE_API_BASE_URL=http://localhost:8000/api
 
