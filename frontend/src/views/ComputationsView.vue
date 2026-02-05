@@ -309,6 +309,7 @@
               class="mb-4"
             />
             <v-select
+              v-if="!isDataPreparation"
               v-model="newJob.hpcSite"
               :items="hpcSites"
               label="HPC Site"

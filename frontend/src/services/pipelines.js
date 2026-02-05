@@ -197,3 +197,40 @@ export async function getSourceColumns(manifest, sourceName = null) {
     throw err
   }
 }
+
+/**
+ * Delete a saved pipeline
+ * @param {string} projectId - The project ID
+ * @param {string} pipelineId - The pipeline file ID
+ * @returns {Promise<object>} Response with deletion confirmation
+ */
+export async function deletePipeline(projectId, pipelineId) {
+  if (!projectId) {
+    throw new Error('Project ID is required')
+  }
+  if (!pipelineId) {
+    throw new Error('Pipeline ID is required')
+  }
+
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/pipeline/${encodeURIComponent(projectId)}/${encodeURIComponent(pipelineId)}`,
+      {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      }
+    )
+
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || `Failed to delete pipeline: ${response.statusText}`)
+    }
+
+    return await response.json()
+  } catch (err) {
+    console.error('Pipeline delete error:', err)
+    throw err
+  }
+}

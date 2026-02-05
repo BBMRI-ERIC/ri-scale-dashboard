@@ -795,6 +795,39 @@ async def update_pipeline(payload: dict = Body(...)) -> JSONResponse:
         raise HTTPException(status_code=500, detail=f"Failed to update pipeline: {str(exc)}") from exc
 
 
+
+
+@app.delete("/pipeline/{project_id}/{pipeline_id}")
+async def delete_pipeline(project_id: str, pipeline_id: str) -> JSONResponse:
+    """Delete a saved pipeline manifest."""
+    try:
+        if not project_id or not isinstance(project_id, str):
+            raise HTTPException(status_code=400, detail="project_id is required and must be a string")
+        if not pipeline_id or not isinstance(pipeline_id, str):
+            raise HTTPException(status_code=400, detail="pipeline_id is required and must be a string")
+
+        project_manifest_dir = get_project_manifest_dir(project_id)
+        pipeline_path = project_manifest_dir / pipeline_id
+
+        if not pipeline_path.exists():
+            raise HTTPException(status_code=404, detail=f"Pipeline {pipeline_id} not found")
+
+        pipeline_path.unlink()
+        logger.info(f"Deleted pipeline {pipeline_id} from project {project_id}")
+        
+        return JSONResponse({
+            "status": "success",
+            "message": f"Pipeline {pipeline_id} deleted successfully",
+            "project_id": project_id,
+            "pipeline_id": pipeline_id
+        })
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Error deleting pipeline")
+        raise HTTPException(status_code=500, detail=f"Failed to delete pipeline: {str(exc)}") from exc
+
+
 @app.post("/pipeline/source-columns")
 async def get_pipeline_source_columns(payload: dict = Body(...)) -> JSONResponse:
     """Get column names for sources in a manifest by initializing the DPS service."""

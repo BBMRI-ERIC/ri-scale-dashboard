@@ -17,61 +17,26 @@
           <div class="actions">
             <v-btn 
               variant="tonal" 
-              prepend-icon="mdi-folder-open-outline"
-              @click="showLoadDialog"
+              prepend-icon="mdi-content-save-outline"
+              @click="handleSave"
+              :disabled="!loadedPipelineId"
             >
-              Load Pipeline
+              Save
             </v-btn>
             <v-btn 
               variant="tonal" 
-              prepend-icon="mdi-content-save-outline"
-              @click="showSaveDialog"
+              prepend-icon="mdi-content-save-edit-outline"
+              @click="showSaveAsDialog"
             >
-              Save Pipeline
+              Save As
             </v-btn>
           </div>
         </div>
 
-        <!-- Load Pipeline Dialog -->
-        <v-dialog v-model="loadDialogOpen" max-width="500px">
-          <v-card>
-            <v-card-title>Load Pipeline</v-card-title>
-            <v-divider />
-            <v-card-text class="pt-6">
-              <div class="text-subtitle-2 mb-2">Project</div>
-              <div class="text-body-2 mb-4">{{ selectedProjectName }}</div>
-
-              <div v-if="isLoadingPipelines" class="text-center py-4">
-                <v-progress-circular indeterminate color="primary" />
-              </div>
-              <div v-else-if="savedPipelines.length === 0" class="text-center py-4 text-body-2">
-                No saved pipelines found for this project
-              </div>
-              <v-list v-else density="comfortable" class="bg-transparent">
-                <v-list-item
-                  v-for="pipeline in savedPipelines"
-                  :key="pipeline.id"
-                  :title="pipeline.name"
-                  :subtitle="`Saved ${new Date(pipeline.created_at * 1000).toLocaleDateString()}`"
-                  @click="loadSelectedPipeline(pipeline.id)"
-                  class="cursor-pointer"
-                  style="border: 1px solid var(--v-border-color); border-radius: 4px; margin-bottom: 8px;"
-                />
-              </v-list>
-              <div v-if="loadError" class="text-error text-caption mt-2 mb-4">{{ loadError }}</div>
-            </v-card-text>
-            <v-divider />
-            <v-card-actions>
-              <v-spacer />
-              <v-btn variant="plain" @click="loadDialogOpen = false">Cancel</v-btn>
-            </v-card-actions>
-          </v-card>
-        </v-dialog>
-
-        <!-- Save Pipeline Dialog -->
+        <!-- Save As Dialog -->
         <v-dialog v-model="saveDialogOpen" max-width="600px">
           <v-card>
-            <v-card-title>Save Pipeline</v-card-title>
+            <v-card-title>Save Pipeline As</v-card-title>
             <v-divider />
             <v-card-text class="pt-6">
               <div class="text-subtitle-2 mb-2">Project</div>
@@ -568,7 +533,8 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import yaml from 'js-yaml'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import AppHeader from '@/components/layout/AppHeader.vue'
@@ -581,6 +547,7 @@ import { useProjectsStore } from '@/stores/projects.js'
 import { useAuthStore } from '@/stores/auth.js'
 import { savePipeline, listPipelines, loadPipeline, updatePipeline, getSourceColumns } from '@/services/pipelines.js'
 
+const route = useRoute()
 const projectsStore = useProjectsStore()
 const authStore = useAuthStore()
 const sidebarRail = ref(false)
@@ -602,11 +569,9 @@ const isSaving = ref(false)
 const savedPipelinesForSave = ref([])
 const isSavingDialogLoading = ref(false)
 
-// Load dialog state
-const loadDialogOpen = ref(false)
-const savedPipelines = ref([])
-const isLoadingPipelines = ref(false)
-const loadError = ref('')
+// Currently loaded pipeline tracking
+const loadedPipelineId = ref(null)
+const loadedPipelineProjectId = ref(null)
 
 // Overwrite dialog state
 const overwriteDialogOpen = ref(false)
@@ -1184,8 +1149,35 @@ function getOrCreateNestedParam(paramKey) {
   return selectedStage.value.config[paramKey]
 }
 
-// Dialog management for pipeline save
-function showSaveDialog() {
+// Handle direct save (overwrites current pipeline)
+async function handleSave() {
+  if (!loadedPipelineId.value || !loadedPipelineProjectId.value) {
+    alert('No pipeline loaded to save')
+    return
+  }
+
+  if (!pipelineName.value) {
+    alert('Pipeline name is not set')
+    return
+  }
+
+  isSaving.value = true
+  try {
+    const manifest = buildManifestFromStages()
+    await updatePipeline(loadedPipelineProjectId.value, loadedPipelineId.value, manifest)
+    
+    console.log('Pipeline saved successfully')
+    alert(`Pipeline "${pipelineName.value}" saved successfully!`)
+  } catch (err) {
+    console.error('Error saving pipeline:', err)
+    alert(`Failed to save pipeline: ${err.message}`)
+  } finally {
+    isSaving.value = false
+  }
+}
+
+// Dialog management for save as
+function showSaveAsDialog() {
   const project = projectsStore.selectedProject
   if (!project) {
     alert('Please select a project first')
@@ -1271,6 +1263,13 @@ async function performSavePipeline(isOverwrite = false) {
     saveDialogOpen.value = false
     overwriteDialogOpen.value = false
     
+    // Update loaded pipeline tracking if this was a new save
+    if (!isOverwrite && result.pipeline_id) {
+      loadedPipelineId.value = result.pipeline_id
+      loadedPipelineProjectId.value = project.id
+      pipelineName.value = pipelineName.value.trim()
+    }
+    
     // Show success message
     alert(`Pipeline "${pipelineName.value}" ${isOverwrite ? 'updated' : 'saved'} successfully!`)
   } catch (err) {
@@ -1278,60 +1277,6 @@ async function performSavePipeline(isOverwrite = false) {
     saveError.value = err.message || 'Failed to save pipeline'
   } finally {
     isSaving.value = false
-  }
-}
-
-async function showLoadDialog() {
-  const project = projectsStore.selectedProject
-  if (!project) {
-    alert('Please select a project first')
-    return
-  }
-
-  loadError.value = ''
-  isLoadingPipelines.value = true
-  loadDialogOpen.value = true
-
-  try {
-    const result = await listPipelines(project.id)
-    savedPipelines.value = result.pipelines || []
-  } catch (err) {
-    console.error('Error listing pipelines:', err)
-    loadError.value = err.message || 'Failed to load pipelines'
-  } finally {
-    isLoadingPipelines.value = false
-  }
-}
-
-async function loadSelectedPipeline(pipelineId) {
-  const project = projectsStore.selectedProject
-  if (!project) {
-    loadError.value = 'No project selected'
-    return
-  }
-
-  try {
-    const result = await loadPipeline(project.id, pipelineId)
-    const manifest = result.manifest
-
-    // Clear current stages and registry
-    stages.value = []
-    selectedStageId.value = null
-    clearRegistry()
-
-    // Convert manifest to YAML and set it, then apply to stages
-    yamlText.value = yaml.dump(manifest)
-    
-    // Reset sync flags and apply YAML to stages
-    isSyncingFromYaml.value = true
-    applyYamlToStages({ preserveSelection: false })
-    isSyncingFromYaml.value = false
-
-    loadDialogOpen.value = false
-    alert('Pipeline loaded successfully!')
-  } catch (err) {
-    console.error('Error loading pipeline:', err)
-    loadError.value = err.message || 'Failed to load pipeline'
   }
 }
 
@@ -1796,6 +1741,33 @@ function rebuildRegistryFromStages() {
   
   fieldRegistry.value = newRegistry
 }
+
+// Check for route params on mount to load a pipeline
+onMounted(async () => {
+  const projectId = route.query.project
+  const pipelineId = route.query.pipeline
+  
+  if (projectId && pipelineId) {
+    try {
+      // Load the pipeline from the backend
+      const response = await loadPipeline(projectId, pipelineId)
+      if (response.manifest) {
+        // Convert manifest to YAML and apply to stages
+        const manifestYaml = yaml.dump(response.manifest)
+        yamlText.value = manifestYaml
+        applyYamlToStages({ preserveSelection: false })
+        
+        // Set the pipeline name and tracking info for future saves
+        pipelineName.value = response.name || pipelineId
+        loadedPipelineId.value = pipelineId
+        loadedPipelineProjectId.value = projectId
+      }
+    } catch (err) {
+      console.error('Failed to load pipeline from route params:', err)
+      // You could show a toast notification here
+    }
+  }
+})
 </script>
 
 <style scoped lang="scss">
