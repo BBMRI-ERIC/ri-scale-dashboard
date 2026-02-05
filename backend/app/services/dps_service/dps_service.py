@@ -13,7 +13,7 @@ from step.custom_command import CustomCommandStep
 import dpsdataset.loaders as loaders
 from step.example_dps_step import ExampleDPSStep
 from step.join import JoinStep
-from dpsdataset.source import FileDiscoveryStrategy, CSVFileStrategy, Source, DataSourceStrategy
+from dpsdataset.source import FileDiscoveryStrategy, CSVFileStrategy, Source, DataSourceStrategy, PreCalculatedColumnsStrategy
 from dpsdataset.lazy_dataframe import LazyDataFrame
 import re
 
@@ -28,24 +28,6 @@ def parse_args(argv=None):
     if not os.path.exists(args.manifest):
         parser.error(f"Manifest path not found: {args.manifest}")
     return args
-
-class PreCalculatedColumnsStrategy(DataSourceStrategy):
-    """Strategy that returns pre-calculated columns without loading data."""
-    def __init__(self, columns: list[str]):
-        """
-        Initialize with pre-calculated columns.
-        Args:
-            columns (list[str]): List of column names.
-        """
-        super().__init__(type="pre_calculated")
-        self.columns = columns
-    
-    def get_data(self) -> LazyDataFrame:
-        """Return a LazyDataFrame with column names but no data."""
-        # Create an empty dataframe with just the columns
-        empty_data = {col: [] for col in self.columns}
-        return LazyDataFrame(empty_data)
-
 
 
 class DataPreparationForExploitationService:
