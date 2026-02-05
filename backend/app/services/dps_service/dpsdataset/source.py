@@ -3,7 +3,7 @@ import glob
 import os
 import re
 import logging
-from typing import Callable, Optional
+from typing import Callable, Optional, List
 from .loaders import getLoader
 from .lazy_dataframe import LazyDataFrame
 
@@ -25,6 +25,24 @@ class DataSourceStrategy():
         raise NotImplementedError("Subclasses should implement this method.")
     
     
+class PreCalculatedColumnsStrategy(DataSourceStrategy):
+    """Strategy that returns pre-calculated columns without loading data."""
+    def __init__(self, columns: list[str]):
+        """
+        Initialize with pre-calculated columns.
+        Args:
+            columns (list[str]): List of column names.
+        """
+        super().__init__(type="pre_calculated")
+        self.columns = columns
+    
+    def get_data(self) -> LazyDataFrame:
+        """Return a LazyDataFrame with column names but no data."""
+        # Create an empty dataframe with just the columns
+        empty_data = {col: [] for col in self.columns}
+        return LazyDataFrame(empty_data)
+    
+
 class FileDiscoveryStrategy(DataSourceStrategy):
     """
     Strategy to discover files in a directory based on a pattern.
@@ -132,6 +150,15 @@ class Source:
     def get_data(self) -> Optional[LazyDataFrame]:
         """Get the data from the source."""
         return self._data
+
+    def get_column_names(self) -> List[str]:
+        """Get column names from the underlying data (if available)."""
+        if self._data is None:
+            return []
+        columns = getattr(self._data, "columns", None)
+        if columns is None:
+            return []
+        return list(columns)
         
 
 if __name__ == "__main__":
