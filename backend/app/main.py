@@ -49,6 +49,10 @@ app.add_middleware(
         "http://127.0.0.1:5174",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:4173",
+        "https://sj6vxmbr-5173.euw.devtunnels.ms",
+        "https://sj6vxmbr-5174.euw.devtunnels.ms",
+        "https://sj6vxmbr-3000.euw.devtunnels.ms",
+        "https://sj6vxmbr-4173.euw.devtunnels.ms"
     ],
     allow_credentials=True,
     allow_methods=["*"],

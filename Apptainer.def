@@ -1,0 +1,131 @@
+Bootstrap: docker
+From: python:3.11-slim
+
+%labels
+    Author RI-SCALE Project
+    Version 0.1.0
+    Description RI-SCALE Dashboard with Data Preparation for Exploitation Service (DPS)
+    Project UC7 and UC8 - Digital Pathology and Synthetic Data Generation
+
+%help
+    RI-SCALE Dashboard Container
+    
+    Scientific Use Cases: UC7 (Colorectal Cancer Prediction) and UC8 (Synthetic Data Generation)
+    
+    Features:
+    - FastAPI backend with DPS service
+    - Vue.js frontend with Vite
+    - Support for whole-slide image (WSI) processing
+    - YAML-based pipeline configuration
+    - VS Code CLI for remote development
+    
+    Usage:
+    apptainer run ri-scale-dashboard.sif
+    apptainer exec ri-scale-dashboard.sif python backend/app/main.py
+    apptainer exec ri-scale-dashboard.sif npm run dev
+    apptainer exec ri-scale-dashboard.sif code --version
+    
+    VS Code CLI Examples:
+    apptainer exec ri-scale-dashboard.sif code serve-web --accept-server-license-terms
+    apptainer exec ri-scale-dashboard.sif code tunnel --accept-server-license-terms
+
+%environment
+    export PATH=/opt/vscode-cli:/opt/ri-scale/node_modules/.bin:$PATH
+    export NODE_ENV=production
+    export PYTHONUNBUFFERED=1
+    export PYTHONPATH=/opt/ri-scale/backend/app:$PYTHONPATH
+    export VSCODE_CLI_HOME=/opt/vscode-cli
+
+%post
+    # Update and install system dependencies
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        git \
+        curl \
+        wget \
+        ca-certificates \
+        pkg-config \
+        libssl-dev \
+        libjpeg-dev \
+        zlib1g-dev \
+        libtiff-dev \
+        libfreetype6-dev \
+        liblcms2-dev \
+        libwebp-dev \
+        tcl8.6-dev \
+        tk8.6-dev \
+        libharfbuzz0b \
+        libopenjp2-7 \
+        libopenjp2-7-dev \
+        openslide-tools \
+        libvips-dev \
+        && rm -rf /var/lib/apt/lists/*
+
+    # Install Node.js for frontend
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    apt-get install -y --no-install-recommends nodejs
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+
+    # Create application directory
+    mkdir -p /opt/ri-scale
+    cd /opt/ri-scale
+
+    # Install VS Code CLI
+    echo "Installing VS Code CLI..."
+    mkdir -p /opt/vscode-cli
+    cd /opt/vscode-cli
+    
+    if [ -f "/opt/code" ]; then
+        echo "Found local VS Code CLI at /opt/code. Setting up..."
+        cp /opt/code /opt/vscode-cli/code
+        chmod +x code
+        ln -sf /opt/vscode-cli/code /usr/local/bin/code
+    else
+        echo "WARNING: Local VS Code CLI binary not found at /opt/code"
+        echo "Skipping VS Code CLI installation. You can install it manually later."
+    fi
+    cd /opt/ri-scale
+
+    # Install Python backend dependencies
+    pip install --no-cache-dir --upgrade pip setuptools wheel
+    cat > /tmp/requirements.txt << 'EOF'
+fastapi==0.110.0
+uvicorn[standard]==0.23.2
+pyyaml>=6.0
+python-multipart>=0.0.22
+numpy==1.26.4
+traitlets==5.14.3
+Pillow>=10.1.0,<11.0.0
+openslide-python==1.4.3
+wsidicomizer==0.24.0
+pandas>=2.0.0
+EOF
+    pip install --no-cache-dir -r /tmp/requirements.txt
+    rm /tmp/requirements.txt
+
+    # Install frontend dependencies
+    echo "Installing frontend dependencies..."
+    cd /opt/ri-scale/frontend
+    npm install --legacy-peer-deps
+    cd /opt/ri-scale
+
+%files
+    code /opt/code
+    backend /opt/ri-scale/backend
+    frontend /opt/ri-scale/frontend
+    configs /opt/ri-scale/configs
+
+%startscript
+    #!/bin/bash
+    echo "RI-SCALE Dashboard Container started"
+    echo "Starting FastAPI backend on 0.0.0.0:8000"
+    cd /opt/ri-scale/backend/app
+    exec python -m uvicorn main:app --host 0.0.0.0 --port 8000
+
+%runscript
+    #!/bin/bash
+    # Default: run the backend
+    cd /opt/ri-scale/backend/app
+    exec python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
