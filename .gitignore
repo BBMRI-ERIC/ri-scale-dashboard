@@ -1,0 +1,45 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.claude
+CLAUDE.md
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# Apptainer / container images
+*.sif
+*.simg
+
+# Runtime uploads (user data, not source)
+backend/app/uploads/**/
+backend/app/uploads/*
+!backend/app/uploads/.gitkeep
+
+# Frontend (covered by frontend/.gitignore, but also here for root-level git)
+frontend/node_modules/
+frontend/dist/
