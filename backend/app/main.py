@@ -67,6 +67,13 @@ JOBS_STORE: dict = {}
 JOBS_STORE_FILE = BASE_DIR / ".jobs_store.json"
 JOBS_STORE_LOCK = threading.Lock()
 
+# In-memory store for direct pipeline runs (no job submission)
+RUNS_STORE: dict = {}
+RUNS_STORE_FILE = BASE_DIR / ".runs_store.json"
+RUNS_STORE_LOCK = threading.Lock()
+CANCEL_EVENTS: dict[str, threading.Event] = {}
+JOB_CANCEL_EVENTS: dict[str, threading.Event] = {}
+
 def load_jobs_store() -> None:
     """Load jobs from persistent storage on startup."""
     global JOBS_STORE
@@ -107,6 +114,47 @@ def _append_job_log(job_id: str, message: str) -> None:
     save_jobs_store()
 
 
+def load_runs_store() -> None:
+    """Load pipeline runs from persistent storage on startup."""
+    global RUNS_STORE
+    if RUNS_STORE_FILE.exists():
+        try:
+            with RUNS_STORE_FILE.open("r") as f:
+                RUNS_STORE = json.load(f)
+            logger.info(f"Loaded {len(RUNS_STORE)} runs from store")
+        except Exception as exc:
+            logger.warning(f"Failed to load runs store: {exc}")
+            RUNS_STORE = {}
+
+
+def save_runs_store() -> None:
+    """Persist pipeline runs to disk."""
+    try:
+        with RUNS_STORE_FILE.open("w") as f:
+            json.dump(RUNS_STORE, f, indent=2, default=str)
+    except Exception as exc:
+        logger.error(f"Failed to save runs store: {exc}")
+
+
+def _update_run(run_id: str, updates: dict) -> None:
+    with RUNS_STORE_LOCK:
+        run = RUNS_STORE.get(run_id)
+        if not run:
+            return
+        run.update(updates)
+    save_runs_store()
+
+
+def _append_run_log(run_id: str, message: str) -> None:
+    with RUNS_STORE_LOCK:
+        run = RUNS_STORE.get(run_id)
+        if not run:
+            return
+        existing = run.get("logs") or ""
+        run["logs"] = existing + message
+    save_runs_store()
+
+
 class JobLogHandler(logging.Handler):
     def __init__(self, job_id: str) -> None:
         super().__init__()
@@ -120,7 +168,20 @@ class JobLogHandler(logging.Handler):
             logger.exception("Failed to write job log")
 
 
-def _run_data_preparation_job(job_id: str, simulated: bool) -> None:
+class RunLogHandler(logging.Handler):
+    def __init__(self, run_id: str) -> None:
+        super().__init__()
+        self.run_id = run_id
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = self.format(record)
+            _append_run_log(self.run_id, msg + "\n")
+        except Exception:
+            logger.exception("Failed to write run log")
+
+
+def _run_data_preparation_job(job_id: str, simulated: bool, cancel_event: threading.Event) -> None:
     try:
         with JOBS_STORE_LOCK:
             job = JOBS_STORE.get(job_id)
@@ -163,26 +224,28 @@ def _run_data_preparation_job(job_id: str, simulated: bool) -> None:
             _append_job_log(job_id, f"[{datetime.utcnow().isoformat()}] INFO - Manifest: {manifest_id}\n")
             _append_job_log(job_id, f"[{datetime.utcnow().isoformat()}] INFO - Project: {project_id}\n")
 
-            service = DataPreparationForExploitationService(manifest_yaml_string_raw)
-            service.run()
+            service = DataPreparationForExploitationService(manifest_yaml_string_raw, cancel_event=cancel_event)
+            success = service.run()
 
-            _append_job_log(job_id, f"[{datetime.utcnow().isoformat()}] INFO - DPS service completed successfully\n")
-
-            updates = {
-                "status": "completed",
-                "completedAt": datetime.utcnow().isoformat()
-            }
-
-            started_at = job.get("startedAt")
-            if started_at:
-                start = datetime.fromisoformat(started_at)
-                end = datetime.fromisoformat(updates["completedAt"])
-                duration = end - start
-                hours, remainder = divmod(int(duration.total_seconds()), 3600)
-                minutes, _ = divmod(remainder, 60)
-                updates["runtime"] = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
-
-            _update_job(job_id, updates)
+            completed_at = datetime.utcnow().isoformat()
+            if cancel_event.is_set():
+                _append_job_log(job_id, f"[{datetime.utcnow().isoformat()}] INFO - Job cancelled\n")
+                _update_job(job_id, {"status": "cancelled", "completedAt": completed_at})
+            elif not success:
+                _append_job_log(job_id, f"[{datetime.utcnow().isoformat()}] ERROR - Pipeline step failed\n")
+                _update_job(job_id, {"status": "failed", "completedAt": completed_at})
+            else:
+                _append_job_log(job_id, f"[{datetime.utcnow().isoformat()}] INFO - DPS service completed successfully\n")
+                updates = {"status": "completed", "completedAt": completed_at}
+                started_at = job.get("startedAt")
+                if started_at:
+                    start = datetime.fromisoformat(started_at)
+                    end = datetime.fromisoformat(completed_at)
+                    duration = end - start
+                    hours, remainder = divmod(int(duration.total_seconds()), 3600)
+                    minutes, _ = divmod(remainder, 60)
+                    updates["runtime"] = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+                _update_job(job_id, updates)
 
         except Exception as exec_exc:
             logger.exception("DPS execution failed")
@@ -192,9 +255,76 @@ def _run_data_preparation_job(job_id: str, simulated: bool) -> None:
             dps_logger.removeHandler(log_handler)
             root_logger.removeHandler(log_handler)
             log_handler.close()
+            JOB_CANCEL_EVENTS.pop(job_id, None)
 
     except Exception:
         logger.exception("Unexpected error in background job runner")
+
+
+def _run_pipeline_run(run_id: str, manifest_dict: dict, simulated: bool, cancel_event: threading.Event) -> None:
+    """Background task for direct pipeline execution (no job submission)."""
+    try:
+        _update_run(run_id, {"status": "running", "started_at": datetime.utcnow().isoformat()})
+
+        if not HAS_DPS_SERVICE:
+            _update_run(run_id, {"status": "failed", "error": "DPS service is not available"})
+            return
+
+        log_handler = RunLogHandler(run_id)
+        log_handler.setLevel(logging.INFO)
+        log_handler.setFormatter(logging.Formatter('[%(asctime)s] %(levelname)s - %(message)s'))
+
+        dps_logger = logging.getLogger('dps_service')
+        root_logger = logging.getLogger()
+        dps_logger.addHandler(log_handler)
+        root_logger.addHandler(log_handler)
+
+        try:
+            manifest_dict = dict(manifest_dict)
+            manifest_dict["simulated"] = simulated
+            manifest_yaml = yaml.safe_dump(manifest_dict, sort_keys=False, allow_unicode=False)
+
+            mode = "simulated" if simulated else "production"
+            _append_run_log(run_id, f"[{datetime.utcnow().isoformat()}] INFO - Starting pipeline run ({mode})\n")
+
+            service = DataPreparationForExploitationService(manifest_yaml, cancel_event=cancel_event)
+            success = service.run()
+
+            completed_at = datetime.utcnow().isoformat()
+            if cancel_event.is_set():
+                _append_run_log(run_id, f"[{datetime.utcnow().isoformat()}] INFO - Pipeline run cancelled\n")
+                _update_run(run_id, {"status": "cancelled", "completed_at": completed_at})
+            elif not success:
+                _append_run_log(run_id, f"[{datetime.utcnow().isoformat()}] ERROR - Pipeline step failed\n")
+                _update_run(run_id, {"status": "failed", "completed_at": completed_at})
+            else:
+                _append_run_log(run_id, f"[{datetime.utcnow().isoformat()}] INFO - Pipeline completed successfully\n")
+                updates = {"status": "completed", "completed_at": completed_at}
+                with RUNS_STORE_LOCK:
+                    started_at = RUNS_STORE.get(run_id, {}).get("started_at")
+                if started_at:
+                    start = datetime.fromisoformat(started_at)
+                    end = datetime.fromisoformat(completed_at)
+                    mins, secs = divmod(int((end - start).total_seconds()), 60)
+                    updates["runtime"] = f"{mins}m {secs}s" if mins else f"{secs}s"
+                _update_run(run_id, updates)
+
+        except Exception as exec_exc:
+            logger.exception("Pipeline run failed")
+            _append_run_log(run_id, f"[{datetime.utcnow().isoformat()}] ERROR - Execution failed: {exec_exc}\n")
+            _update_run(run_id, {
+                "status": "failed",
+                "error": str(exec_exc),
+                "completed_at": datetime.utcnow().isoformat(),
+            })
+        finally:
+            dps_logger.removeHandler(log_handler)
+            root_logger.removeHandler(log_handler)
+            log_handler.close()
+            CANCEL_EVENTS.pop(run_id, None)
+
+    except Exception:
+        logger.exception("Unexpected error in pipeline run background task")
 
 
 def get_project_dir(project_id: str) -> Path:
@@ -419,10 +549,13 @@ async def execute_job(
             save_jobs_store()
             raise HTTPException(status_code=503, detail="DPS service is not available. Please install dependencies")
 
+        cancel_event = threading.Event()
+        JOB_CANCEL_EVENTS[job_id] = cancel_event
+
         if background_tasks is None:
             background_tasks = BackgroundTasks()
 
-        background_tasks.add_task(_run_data_preparation_job, job_id, simulated)
+        background_tasks.add_task(_run_data_preparation_job, job_id, simulated, cancel_event)
 
         mode = "simulated" if simulated else "production"
         logger.info(f"Job {job_id} queued for execution in {mode} mode")
@@ -521,7 +654,12 @@ async def cancel_job(job_id: str) -> JSONResponse:
         if job["status"] not in ["queued", "running"]:
             raise HTTPException(status_code=400, detail=f"Cannot cancel job with status {job['status']}")
 
-        job["status"] = "cancelled"
+        cancel_event = JOB_CANCEL_EVENTS.get(job_id)
+        if cancel_event and job["status"] == "running":
+            cancel_event.set()
+            job["status"] = "cancelling"
+        else:
+            job["status"] = "cancelled"
         save_jobs_store()
 
         logger.info(f"Job cancelled: {job_id}")
@@ -1125,10 +1263,217 @@ async def delete_folder(project_id: str, path: str = Query(...)) -> JSONResponse
         raise HTTPException(status_code=500, detail=f"Failed to delete folder: {str(exc)}") from exc
 
 
+@app.post("/fs-create-folder")
+async def fs_create_folder(payload: dict = Body(...)) -> JSONResponse:
+    """Create a folder at an absolute path within the data root."""
+    import os
+    data_root = os.environ.get("DATA_DIR", os.environ.get("DATA", ""))
+
+    parent_path = payload.get("parent_path", "")
+    folder_name = payload.get("folder_name", "").strip()
+
+    if not folder_name:
+        raise HTTPException(status_code=400, detail="folder_name is required")
+    if "/" in folder_name or "\\" in folder_name or ".." in folder_name:
+        raise HTTPException(status_code=400, detail="Invalid folder name")
+    if not parent_path:
+        raise HTTPException(status_code=400, detail="parent_path is required")
+
+    parent = Path(parent_path).resolve()
+
+    if data_root:
+        root_resolved = Path(data_root).resolve()
+        if not str(parent).startswith(str(root_resolved)):
+            raise HTTPException(status_code=403, detail="Access denied: path is outside the data root")
+
+    if not parent.exists() or not parent.is_dir():
+        raise HTTPException(status_code=404, detail="Parent directory not found")
+
+    new_folder = parent / folder_name
+    if new_folder.exists():
+        raise HTTPException(status_code=409, detail="Folder already exists")
+
+    new_folder.mkdir(parents=False)
+    logger.info(f"Created folder: {new_folder}")
+    return JSONResponse({"status": "success", "path": str(new_folder)})
+
+
+@app.get("/config/data-root")
+async def get_data_root() -> JSONResponse:
+    """Return the resolved DATA or DATA_DIR environment variable."""
+    import os
+    path = os.environ.get("DATA_DIR", os.environ.get("DATA", ""))
+    return JSONResponse({"path": path})
+
+
+@app.get("/fs-browse")
+async def browse_filesystem(path: str = Query("")) -> JSONResponse:
+    """
+    Browse the real filesystem starting at the DATA/DATA_DIR root.
+    Access is restricted to paths under the resolved data root.
+    """
+    import os
+    data_root = os.environ.get("DATA_DIR", os.environ.get("DATA", ""))
+
+    # Determine the directory to list
+    if not path:
+        if not data_root:
+            return JSONResponse({
+                "current_path": "",
+                "parent_path": None,
+                "entries": [],
+                "error": "Neither $DATA nor $DATA_DIR environment variable is set",
+            })
+        path = data_root
+
+    requested = Path(path).resolve()
+
+    # Security: if a data root is configured, restrict navigation to within it
+    if data_root:
+        root_resolved = Path(data_root).resolve()
+        if not str(requested).startswith(str(root_resolved)):
+            raise HTTPException(status_code=403, detail="Access denied: path is outside the data root")
+
+    if not requested.exists():
+        raise HTTPException(status_code=404, detail=f"Path does not exist: {path}")
+    if not requested.is_dir():
+        raise HTTPException(status_code=400, detail="Path is not a directory")
+
+    entries = []
+    try:
+        for item in sorted(requested.iterdir(), key=lambda x: (x.is_file(), x.name)):
+            entry = {
+                "name": item.name,
+                "type": "directory" if item.is_dir() else "file",
+                "path": str(item.resolve()),
+                "absolute_path": str(item.resolve()),
+            }
+            if item.is_file():
+                try:
+                    entry["size"] = item.stat().st_size
+                except OSError:
+                    entry["size"] = 0
+            entries.append(entry)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Permission denied accessing directory")
+
+    # Parent path: one level up, but not above the data root
+    parent_path = None
+    if data_root:
+        root_resolved = Path(data_root).resolve()
+        if requested != root_resolved:
+            parent = requested.parent
+            if str(parent).startswith(str(root_resolved)):
+                parent_path = str(parent)
+    else:
+        parent_path = str(requested.parent) if requested.parent != requested else None
+
+    return JSONResponse({
+        "current_path": str(requested),
+        "parent_path": parent_path,
+        "entries": entries,
+    })
+
+
+@app.post("/pipeline/run")
+async def start_pipeline_run(
+    payload: dict = Body(...),
+    background_tasks: BackgroundTasks = None,
+) -> JSONResponse:
+    """Start a direct pipeline run from a manifest (no job submission required)."""
+    manifest = payload.get("manifest")
+    simulated = payload.get("simulated", False)
+    pipeline_id = payload.get("pipeline_id")
+    pipeline_name = payload.get("pipeline_name", "Unnamed pipeline")
+    project_id = payload.get("project_id")
+
+    if not isinstance(manifest, dict):
+        raise HTTPException(status_code=400, detail="manifest must be an object")
+    if not HAS_DPS_SERVICE:
+        raise HTTPException(status_code=503, detail="DPS service is not available")
+
+    run_id = f"run-{uuid.uuid4().hex[:16]}"
+    now = datetime.utcnow().isoformat()
+
+    cancel_event = threading.Event()
+    CANCEL_EVENTS[run_id] = cancel_event
+
+    run = {
+        "run_id": run_id,
+        "status": "starting",
+        "pipeline_id": pipeline_id,
+        "pipeline_name": pipeline_name,
+        "project_id": project_id,
+        "simulated": simulated,
+        "created_at": now,
+        "started_at": None,
+        "completed_at": None,
+        "runtime": None,
+        "error": None,
+        "logs": "",
+    }
+
+    with RUNS_STORE_LOCK:
+        RUNS_STORE[run_id] = run
+    save_runs_store()
+
+    if background_tasks is None:
+        background_tasks = BackgroundTasks()
+    background_tasks.add_task(_run_pipeline_run, run_id, manifest, simulated, cancel_event)
+
+    logger.info(f"Pipeline run started: {run_id} ({pipeline_name})")
+    return JSONResponse({"status": "success", "run_id": run_id, "run": run})
+
+
+@app.get("/pipeline/run/{run_id}")
+async def get_pipeline_run(run_id: str) -> JSONResponse:
+    """Get the status and logs of a pipeline run."""
+    with RUNS_STORE_LOCK:
+        run = RUNS_STORE.get(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+    return JSONResponse({"status": "success", "run": run})
+
+
+@app.post("/pipeline/run/{run_id}/cancel")
+async def cancel_pipeline_run(run_id: str) -> JSONResponse:
+    """Request cancellation of an active pipeline run."""
+    with RUNS_STORE_LOCK:
+        run = RUNS_STORE.get(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+    if run["status"] not in ("starting", "running"):
+        raise HTTPException(status_code=400, detail=f"Run is not active (status: {run['status']})")
+
+    cancel_event = CANCEL_EVENTS.get(run_id)
+    if cancel_event:
+        cancel_event.set()
+    _update_run(run_id, {"status": "cancelling"})
+
+    logger.info(f"Cancellation requested for run {run_id}")
+    return JSONResponse({"status": "success", "message": f"Cancellation requested for run {run_id}"})
+
+
+@app.get("/pipeline/runs")
+async def list_pipeline_runs(project_id: Optional[str] = Query(None)) -> JSONResponse:
+    """List all pipeline runs, optionally filtered by project."""
+    with RUNS_STORE_LOCK:
+        runs = list(RUNS_STORE.values())
+    if project_id:
+        runs = [r for r in runs if r.get("project_id") == project_id]
+    # Sort newest first; strip logs from list view to keep response small
+    runs_summary = [
+        {k: v for k, v in r.items() if k != "logs"}
+        for r in sorted(runs, key=lambda x: x.get("created_at", ""), reverse=True)
+    ]
+    return JSONResponse({"status": "success", "runs": runs_summary})
+
+
 @app.on_event("startup")
 async def startup_event():
-    """Load jobs store on application startup."""
+    """Load stores on application startup."""
     load_jobs_store()
+    load_runs_store()
     logger.info("Application startup complete")
 
 

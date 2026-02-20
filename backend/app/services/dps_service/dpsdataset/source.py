@@ -143,22 +143,27 @@ class Source:
         """
         self.source_name = source_name
         self.data_source_strategy = data_source_strategy
-        
-        self._data: Optional[pd.DataFrame] = data_source_strategy.get_data() if data_source_strategy else None
-        
-        
+        self._data: Optional[LazyDataFrame] = None
+
     def get_data(self) -> Optional[LazyDataFrame]:
-        """Get the data from the source."""
+        """Get the data from the source, loading it lazily on first access."""
+        if self._data is None and self.data_source_strategy is not None:
+            self._data = self.data_source_strategy.get_data()
         return self._data
 
     def get_column_names(self) -> List[str]:
         """Get column names from the underlying data (if available)."""
-        if self._data is None:
+        try:
+            data = self.get_data()
+            if data is None:
+                return []
+            columns = getattr(data, "columns", None)
+            if columns is None:
+                return []
+            return list(columns)
+        except Exception as e:
+            logger.warning("Could not load data for column introspection on '%s': %s", self.source_name, e)
             return []
-        columns = getattr(self._data, "columns", None)
-        if columns is None:
-            return []
-        return list(columns)
         
 
 if __name__ == "__main__":

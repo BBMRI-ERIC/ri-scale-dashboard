@@ -32,17 +32,22 @@ class JoinStep(DPSStep):
 
     def execute(self) -> bool:
         """Execute the join operation between the two sources."""
-        
-        
         logger.info("Joining between %s and %s", self.left_source.source_name, self.right_source.source_name)
         try:
             left_df = self.left_source.get_data()
             right_df = self.right_source.get_data()
             joined_df = left_df.merge(right_df, how=self.join_type, left_on=self.left_key, right_on=self.right_key)
+
+            if self.missing_policy == "drop":
+                before = len(joined_df)
+                joined_df = joined_df.dropna()
+                dropped = before - len(joined_df)
+                if dropped:
+                    logger.info("Dropped %d unmatched row(s) due to missing_policy=drop", dropped)
+
             self.output_source._data = joined_df
-            #logger.info(f"Join of {self.left_source.source_name} and {self.right_source.source_name} completed.")
-            logger.info(f"Output source {self.output_source.source_name} has {len(joined_df)} records.")
+            logger.info("Output source %s has %d records.", self.output_source.source_name, len(joined_df))
             return True
         except Exception as e:
-            logger.error(f"Error during step {self.name}: {e}")
+            logger.error("Error during step %s: %s", self.name, e)
             return False

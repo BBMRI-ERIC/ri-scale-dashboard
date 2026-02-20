@@ -199,6 +199,72 @@ export async function getSourceColumns(manifest, sourceName = null) {
 }
 
 /**
+ * Start a direct pipeline run (no job submission)
+ * @param {object} options - { manifest, simulated, pipeline_id, pipeline_name, project_id }
+ * @returns {Promise<object>} Response with run_id
+ */
+export async function runPipeline({ manifest, simulated = false, pipeline_id = null, pipeline_name = 'Unnamed pipeline', project_id = null }) {
+  const response = await fetch(`${API_BASE_URL}/pipeline/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ manifest, simulated, pipeline_id, pipeline_name, project_id }),
+  })
+  if (!response.ok) {
+    const error = await response.json()
+    throw new Error(error.detail || `Failed to start run: ${response.statusText}`)
+  }
+  return await response.json()
+}
+
+/**
+ * Get the status and logs of a pipeline run
+ * @param {string} runId
+ * @returns {Promise<object>} Response with run record
+ */
+export async function getRun(runId) {
+  const response = await fetch(`${API_BASE_URL}/pipeline/run/${encodeURIComponent(runId)}`)
+  if (!response.ok) {
+    const error = await response.json()
+    throw new Error(error.detail || `Failed to get run: ${response.statusText}`)
+  }
+  return await response.json()
+}
+
+/**
+ * Request cancellation of an active pipeline run
+ * @param {string} runId
+ * @returns {Promise<object>}
+ */
+export async function cancelRun(runId) {
+  const response = await fetch(`${API_BASE_URL}/pipeline/run/${encodeURIComponent(runId)}/cancel`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  })
+  if (!response.ok) {
+    const error = await response.json()
+    throw new Error(error.detail || `Failed to cancel run: ${response.statusText}`)
+  }
+  return await response.json()
+}
+
+/**
+ * List all pipeline runs, optionally filtered by project
+ * @param {string|null} projectId
+ * @returns {Promise<object>} Response with runs array
+ */
+export async function listRuns(projectId = null) {
+  const url = projectId
+    ? `${API_BASE_URL}/pipeline/runs?project_id=${encodeURIComponent(projectId)}`
+    : `${API_BASE_URL}/pipeline/runs`
+  const response = await fetch(url)
+  if (!response.ok) {
+    const error = await response.json()
+    throw new Error(error.detail || `Failed to list runs: ${response.statusText}`)
+  }
+  return await response.json()
+}
+
+/**
  * Delete a saved pipeline
  * @param {string} projectId - The project ID
  * @param {string} pipelineId - The pipeline file ID

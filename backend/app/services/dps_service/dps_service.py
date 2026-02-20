@@ -7,6 +7,7 @@ USAGE EXAMPLE:
 import argparse
 import os
 import logging
+import threading
 import yaml
 from dps_pipeline import DPSPipeline
 from step.custom_command import CustomCommandStep
@@ -23,6 +24,8 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Validate pipeline arguments")
     parser.add_argument("-m", "--manifest", required=True, help="Manifest file path")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose logging")
+    parser.add_argument("-s", "--simulated", action="store_true", default=None,
+                        help="Override manifest simulated flag: run in simulated (dry-run) mode")
     args = parser.parse_args(argv)
 
     if not os.path.exists(args.manifest):
@@ -42,13 +45,15 @@ class DataPreparationForExploitationService:
     ensures that data ingestion is harmonised across domains and that every dataset can be used
     directly in workflows without further ad-hoc manipulation.
     """
-    def __init__(self, manifest_yaml_string_raw:str):
+    def __init__(self, manifest_yaml_string_raw: str, cancel_event: threading.Event | None = None):
         """
         Initialize the DPS with a manifest file.
         Args:
             manifest_yaml_string_raw (str): Raw YAML string defining sources and steps.
+            cancel_event (threading.Event | None): Optional event to signal cancellation.
         """
-        self.manifest_yaml_string_raw:str = manifest_yaml_string_raw
+        self.manifest_yaml_string_raw: str = manifest_yaml_string_raw
+        self.cancel_event = cancel_event
         self.pipeline: DPSPipeline = DPSPipeline()
         self.__parse_manifest__(manifest_yaml_string_raw)
         
@@ -155,11 +160,13 @@ class DataPreparationForExploitationService:
         fields = re.findall(r'\{(\w+)\}', command)
         
         self.pipeline.add_step(CustomCommandStep(
-            input_source=input_source, 
-            command=command, fields=fields,
+            input_source=input_source,
+            command=command,
+            fields=fields,
             execution_mode=execution_mode,
-            simulated=self.pipeline.simulated
-            ))
+            simulated=self.pipeline.simulated,
+            cancel_event=self.cancel_event,
+        ))
         
         return True
     
@@ -171,7 +178,9 @@ class DataPreparationForExploitationService:
         include = params.get('include', None)
         recursive = params.get('recursive', False)
         column_info = params.get('columns', None)
-        file_type = params.get('file_type', None)
+        raw_file_type = params.get('file_type', params.get('fileType', None))
+        # 'default' means no special loader (same as None)
+        file_type = raw_file_type if raw_file_type and raw_file_type != 'default' else None
         directory_mode = params.get('directory_mode', False)
         
         if source_name is None:
@@ -292,16 +301,20 @@ class DataPreparationForExploitationService:
         Returns:
             bool: True if the pipeline executed successfully, False otherwise.
         """
-        
         logger.info("Running DPS on manifest YAML string")
-        
-        status = True
-        while status:
-            status = self.pipeline.run_next_step()
-            
+
+        while True:
+            if self.cancel_event and self.cancel_event.is_set():
+                logger.info("Pipeline execution cancelled between steps.")
+                return False
+            if not self.pipeline.has_steps_left():
+                logger.info("DPS Pipeline execution completed.")
+                return True
+            success = self.pipeline.run_next_step()
             logger.debug("Pipeline has %d steps left.", len(self.pipeline.steps))
-        logger.info("DPS Pipeline execution completed.")
-        return status
+            if not success:
+                logger.error("Pipeline step failed. Aborting.")
+                return False
     
     def get_sources(self) -> dict[str, Source]:
         """

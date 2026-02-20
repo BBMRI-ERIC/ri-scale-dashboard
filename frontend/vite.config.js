@@ -11,6 +11,9 @@ export default defineConfig({
   },
   server: {
     port: 3000,
+    fs: {
+      allow: ['..']  // Allow imports from outside the frontend/ root (e.g. shared configs/)
+    },
     proxy: {
       '/api': {
         target: 'http://localhost:8000',

@@ -50,7 +50,7 @@
         </v-card>
 
         <!-- Pipelines table -->
-        <section class="table-section">
+        <section class="table-section mb-6">
           <v-card class="pipelines-table-card glass" :elevation="0">
             <v-data-table
               :headers="tableHeaders"
@@ -126,16 +126,115 @@
             </v-data-table>
           </v-card>
         </section>
+
+        <!-- Recent Runs -->
+        <section class="table-section mt-6">
+          <div class="section-label mb-3">
+            <v-icon size="18" class="mr-2">mdi-play-circle-outline</v-icon>
+            Recent Runs
+            <v-btn icon size="x-small" variant="text" class="ml-2" @click="loadRuns" :loading="runsLoading" title="Refresh runs">
+              <v-icon size="16">mdi-refresh</v-icon>
+            </v-btn>
+          </div>
+          <v-card class="pipelines-table-card glass" :elevation="0">
+            <v-data-table
+              :headers="runsHeaders"
+              :items="filteredRuns"
+              :loading="runsLoading"
+              class="pipelines-table"
+              item-key="run_id"
+              density="compact"
+            >
+              <template v-slot:item.pipeline_name="{ item }">
+                <span class="pipeline-name-cell">{{ item.pipeline_name || '—' }}</span>
+              </template>
+              <template v-slot:item.status="{ item }">
+                <v-chip :color="runStatusColor(item.status)" size="x-small" variant="tonal">{{ item.status }}</v-chip>
+              </template>
+              <template v-slot:item.simulated="{ item }">
+                <v-chip size="x-small" variant="outlined" :color="item.simulated ? 'warning' : 'primary'">
+                  {{ item.simulated ? 'Simulated' : 'Production' }}
+                </v-chip>
+              </template>
+              <template v-slot:item.created_at="{ item }">
+                <span class="text-caption">{{ formatDate(item.created_at) }}</span>
+              </template>
+              <template v-slot:item.runtime="{ item }">
+                <span class="text-caption">{{ item.runtime || '—' }}</span>
+              </template>
+              <template v-slot:item.actions="{ item }">
+                <div class="actions-cell">
+                  <v-btn
+                    icon="mdi-text-box-outline"
+                    size="small"
+                    variant="text"
+                    color="primary"
+                    @click.stop="viewRunLogs(item)"
+                    title="View logs"
+                  />
+                  <v-btn
+                    v-if="['starting','running','cancelling'].includes(item.status)"
+                    icon="mdi-stop"
+                    size="small"
+                    variant="text"
+                    color="error"
+                    :loading="item.status === 'cancelling'"
+                    @click.stop="stopRun(item.run_id)"
+                    title="Stop run"
+                  />
+                </div>
+              </template>
+              <template v-slot:no-data>
+                <div class="empty-state" style="padding: 2rem">
+                  <p>No runs yet. Use the Pipeline Builder to run a pipeline.</p>
+                </div>
+              </template>
+            </v-data-table>
+          </v-card>
+        </section>
+
+        <!-- Log viewer dialog -->
+        <v-dialog v-model="logDialogOpen" max-width="900px">
+          <v-card>
+            <v-card-title class="d-flex align-center">
+              <v-icon class="mr-2">mdi-console</v-icon>
+              {{ selectedRun?.pipeline_name || 'Run' }}
+              <v-chip :color="runStatusColor(selectedRun?.status)" size="x-small" variant="tonal" class="ml-2">
+                {{ selectedRun?.status }}
+              </v-chip>
+              <v-spacer />
+              <v-btn
+                v-if="['starting','running','cancelling'].includes(selectedRun?.status)"
+                size="small"
+                variant="tonal"
+                color="error"
+                :loading="selectedRun?.status === 'cancelling'"
+                @click="stopRun(selectedRun.run_id)"
+              >Stop</v-btn>
+            </v-card-title>
+            <v-divider />
+            <v-card-text style="padding: 0">
+              <div class="log-output-dialog" ref="logDialogEl">
+                <pre class="log-text-dialog">{{ selectedRunLogs || '(no output yet)' }}</pre>
+              </div>
+            </v-card-text>
+            <v-divider />
+            <v-card-actions>
+              <v-spacer />
+              <v-btn variant="plain" @click="logDialogOpen = false">Close</v-btn>
+            </v-card-actions>
+          </v-card>
+        </v-dialog>
       </div>
     </v-main>
   </v-layout>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useProjectsStore } from '@/stores/projects'
-import { listPipelines, deletePipeline as deletePipelineAPI } from '@/services/pipelines'
+import { listPipelines, deletePipeline as deletePipelineAPI, listRuns, getRun, cancelRun } from '@/services/pipelines'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import AppHeader from '@/components/layout/AppHeader.vue'
 
@@ -147,6 +246,98 @@ const selectedProject = ref('all')
 const pipelines = ref([])
 const isLoading = ref(false)
 const error = ref(null)
+
+// Runs state
+const runs = ref([])
+const runsLoading = ref(false)
+const logDialogOpen = ref(false)
+const selectedRun = ref(null)
+const selectedRunLogs = ref('')
+const logDialogEl = ref(null)
+let runsRefreshTimer = null
+
+const runsHeaders = [
+  { title: 'Pipeline', key: 'pipeline_name' },
+  { title: 'Status', key: 'status' },
+  { title: 'Mode', key: 'simulated' },
+  { title: 'Started', key: 'created_at' },
+  { title: 'Runtime', key: 'runtime' },
+  { title: 'Actions', key: 'actions', sortable: false, align: 'center', width: '100px' },
+]
+
+const filteredRuns = computed(() => {
+  if (selectedProject.value === 'all') return runs.value
+  return runs.value.filter(r => r.project_id === selectedProject.value)
+})
+
+const runStatusColor = (status) => {
+  const map = { running: 'primary', completed: 'success', failed: 'error', cancelled: 'warning', cancelling: 'warning', starting: 'grey' }
+  return map[status] || 'grey'
+}
+
+async function loadRuns() {
+  runsLoading.value = true
+  try {
+    const projectId = selectedProject.value !== 'all' ? selectedProject.value : null
+    const result = await listRuns(projectId)
+    runs.value = result.runs || []
+  } catch (err) {
+    console.warn('Failed to load runs:', err)
+  } finally {
+    runsLoading.value = false
+  }
+}
+
+async function viewRunLogs(run) {
+  selectedRun.value = run
+  selectedRunLogs.value = ''
+  logDialogOpen.value = true
+  try {
+    const result = await getRun(run.run_id)
+    selectedRun.value = result.run
+    selectedRunLogs.value = result.run.logs || ''
+    nextTick(() => {
+      if (logDialogEl.value) logDialogEl.value.scrollTop = logDialogEl.value.scrollHeight
+    })
+  } catch (err) {
+    selectedRunLogs.value = `Failed to load logs: ${err.message}`
+  }
+}
+
+async function stopRun(runId) {
+  try {
+    await cancelRun(runId)
+    await loadRuns()
+    if (selectedRun.value?.run_id === runId) {
+      selectedRun.value = { ...selectedRun.value, status: 'cancelling' }
+    }
+  } catch (err) {
+    console.error('Failed to stop run:', err)
+  }
+}
+
+function startRunsRefresh() {
+  runsRefreshTimer = setInterval(async () => {
+    const hasActive = runs.value.some(r => ['starting', 'running', 'cancelling'].includes(r.status))
+    if (hasActive) {
+      await loadRuns()
+      // Refresh open dialog logs too
+      if (logDialogOpen.value && selectedRun.value) {
+        const active = ['starting', 'running', 'cancelling'].includes(selectedRun.value.status)
+        if (active) {
+          try {
+            const result = await getRun(selectedRun.value.run_id)
+            selectedRun.value = result.run
+            selectedRunLogs.value = result.run.logs || ''
+            nextTick(() => {
+              if (logDialogEl.value) logDialogEl.value.scrollTop = logDialogEl.value.scrollHeight
+            })
+          } catch { /* ignore */ }
+        }
+      }
+    }
+  }, 2000)
+}
 
 // Table headers
 const tableHeaders = [
@@ -304,15 +495,27 @@ function openPipeline(pipeline) {
 import { watch } from 'vue'
 watch(selectedProject, () => {
   loadPipelines()
+  loadRuns()
+})
+
+// When the store finishes loading projects (async, 500ms delay), sync the local filter
+watch(() => projectsStore.selectedProjectId, (newId) => {
+  if (newId && selectedProject.value === 'all') {
+    selectedProject.value = newId
+  }
 })
 
 onMounted(() => {
-  // Set selected project from store if available
   if (projectsStore.selectedProjectId) {
     selectedProject.value = projectsStore.selectedProjectId
   }
-  
   loadPipelines()
+  loadRuns()
+  startRunsRefresh()
+})
+
+onUnmounted(() => {
+  if (runsRefreshTimer) clearInterval(runsRefreshTimer)
 })
 </script>
 
@@ -402,16 +605,43 @@ onMounted(() => {
 .empty-state {
   text-align: center;
   padding: 4rem 2rem;
-  
+
   h3 {
     font-size: 1.125rem;
     color: #f1f5f9;
     margin: 0;
   }
-  
+
   p {
     color: #64748b;
     margin: 0.5rem 0 0;
   }
+}
+
+.section-label {
+  display: flex;
+  align-items: center;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.log-output-dialog {
+  height: 400px;
+  overflow-y: auto;
+  background: #0d1117;
+  padding: 16px;
+}
+
+.log-text-dialog {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #94a3b8;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
 }
 </style>

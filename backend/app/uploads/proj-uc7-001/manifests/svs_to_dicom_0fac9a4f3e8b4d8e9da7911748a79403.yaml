@@ -1,6 +1,6 @@
-manifest_id: id2026-02-02
+manifest_id: id2026-02-20
 created_by: Test User
-created_at: '2026-02-02T16:42:49.872Z'
+created_at: '2026-02-20T09:28:53.961Z'
 simulated: true
 job_steps:
 - step_name: Data Loader
@@ -9,25 +9,27 @@ job_steps:
   params:
     output_source_name: source1
     mode: discovery
-    path: ./uploads/data/wsi
+    path: /data/GTEX
     include: '*.svs'
     recursive: false
     directory_mode: false
     columns:
       column_name: svs_path
-      filename_to_columnname: ^(?P<slide_id>.+?)$
+      filename_to_columnname: ^(?P<slide_id>.+?)\.svs$
       header: true
       delimiter: ','
     fileType: default
+    description: ''
+    notes: ''
 - step_name: Run Command
   type: custom_command
   command_chain_type: dicom_conversion
   chain_command_name: Convert to DICOM
   enabled: true
   params:
-    input_source_name: 'source1'
-    command: wsidicomizer -i {svs_path} -o ./uploads/data/dicom_output/{slide_id} --source
-      opentile --format jpeg --quality 100
+    input_source_name: source1
+    command: wsidicomizer -i {svs_path} -o ./uploads/data/dicom_output/{slide_id}
+      --source opentile --format jpeg --quality 100
     execution_mode: per_row
 - step_name: Data Loader
   type: load
@@ -50,3 +52,5 @@ job_steps:
     command: echo "Conversion Finished"
     execution_mode: once
     input_source_name: source1
+    description: ''
+    notes: ''

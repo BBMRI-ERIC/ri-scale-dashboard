@@ -35,31 +35,21 @@
         >
           New Folder
         </v-btn>
-        <v-btn
-          size="small"
-          variant="tonal"
-          color="error"
-          prepend-icon="mdi-delete"
-          @click="confirmDeleteFolder"
-          :disabled="!selectedPath || selectedEntryType !== 'directory'"
-        >
-          Delete Folder
-        </v-btn>
-      </div>
+        </div>
 
       <v-divider />
 
       <!-- Breadcrumb Navigation -->
       <div class="breadcrumb-section">
         <div class="breadcrumb">
-          <v-btn 
-            size="small" 
-            variant="text" 
+          <v-btn
+            size="small"
+            variant="text"
             prepend-icon="mdi-home"
-            @click="navigateTo('')"
-            :color="currentPath === '' ? 'primary' : 'default'"
+            @click="navigateHome"
+            :color="isAtRoot ? 'primary' : 'default'"
           >
-            Root
+            {{ mode === 'filesystem' ? (initialPathName || 'Root') : 'Root' }}
           </v-btn>
           <span v-if="currentPath" class="breadcrumb-separator">/</span>
           <template v-for="(part, index) in breadcrumbParts" :key="index">
@@ -254,6 +244,16 @@ const props = defineProps({
   fileTypesFilter: {
     type: Array,
     default: () => []
+  },
+  /** 'project' browses the project upload dir; 'filesystem' browses the real FS */
+  mode: {
+    type: String,
+    default: 'project'
+  },
+  /** Starting path for filesystem mode (e.g. resolved $DATA value) */
+  initialPath: {
+    type: String,
+    default: ''
   }
 })
 
@@ -265,6 +265,7 @@ const selectedPath = ref('')
 const selectedEntryType = ref('')
 const isLoading = ref(false)
 const error = ref('')
+const serverParentPath = ref(null) // used in filesystem mode
 
 // Create folder state
 const showCreateFolderDialog = ref(false)
@@ -276,12 +277,38 @@ const createFolderError = ref('')
 const showDeleteFolderDialog = ref(false)
 const isDeletingFolder = ref(false)
 
+// The last path segment of initialPath, used as the Home button label
+const initialPathName = computed(() => {
+  if (!props.initialPath) return ''
+  return props.initialPath.split('/').filter(p => p).pop() || props.initialPath
+})
+
+const isAtRoot = computed(() => {
+  if (props.mode === 'filesystem') return currentPath.value === props.initialPath
+  return currentPath.value === ''
+})
+
 const breadcrumbParts = computed(() => {
+  if (props.mode === 'filesystem') {
+    if (!currentPath.value || !props.initialPath) return []
+    // Show segments relative to the parent of initialPath
+    const base = props.initialPath.split('/').slice(0, -1).join('/')
+    const relative = base && currentPath.value.startsWith(base + '/')
+      ? currentPath.value.slice(base.length + 1)
+      : currentPath.value
+    return relative.split('/').filter(p => p)
+  }
   if (!currentPath.value) return []
   return currentPath.value.split('/').filter(p => p)
 })
 
 const breadcrumbPaths = computed(() => {
+  if (props.mode === 'filesystem') {
+    const base = props.initialPath ? props.initialPath.split('/').slice(0, -1).join('/') : ''
+    return breadcrumbParts.value.map((_, i) =>
+      base + '/' + breadcrumbParts.value.slice(0, i + 1).join('/')
+    )
+  }
   const paths = []
   const parts = currentPath.value.split('/').filter(p => p)
   for (let i = 0; i < parts.length; i++) {
@@ -291,6 +318,7 @@ const breadcrumbPaths = computed(() => {
 })
 
 const parentPath = computed(() => {
+  if (props.mode === 'filesystem') return serverParentPath.value
   if (!currentPath.value) return null
   const parts = currentPath.value.split('/').filter(p => p)
   if (parts.length === 0) return null
@@ -326,10 +354,14 @@ async function loadDirectory(path = '') {
   isLoading.value = true
   error.value = ''
   try {
-    const query = path ? `?path=${encodeURIComponent(path)}` : ''
-    const response = await fetch(
-      `/api/projects/${props.projectId}/data-browser${query}`
-    )
+    let url
+    if (props.mode === 'filesystem') {
+      url = path ? `/api/fs-browse?path=${encodeURIComponent(path)}` : '/api/fs-browse'
+    } else {
+      const query = path ? `?path=${encodeURIComponent(path)}` : ''
+      url = `/api/projects/${props.projectId}/data-browser${query}`
+    }
+    const response = await fetch(url)
     if (!response.ok) {
       const data = await response.json()
       throw new Error(data.detail || 'Failed to load directory')
@@ -337,6 +369,9 @@ async function loadDirectory(path = '') {
     const data = await response.json()
     entries.value = data.entries
     currentPath.value = data.current_path
+    if (props.mode === 'filesystem') {
+      serverParentPath.value = data.parent_path ?? null
+    }
   } catch (err) {
     error.value = err.message
     console.error('Error loading directory:', err)
@@ -348,6 +383,14 @@ async function loadDirectory(path = '') {
 function navigateTo(path) {
   selectedPath.value = ''
   loadDirectory(path)
+}
+
+function navigateHome() {
+  if (props.mode === 'filesystem' && props.initialPath) {
+    navigateTo(props.initialPath)
+  } else {
+    navigateTo('')
+  }
 }
 
 function selectEntry(entry) {
@@ -381,29 +424,31 @@ async function createFolder() {
     createFolderError.value = 'Folder name is required'
     return
   }
-  
+
   isCreatingFolder.value = true
   createFolderError.value = ''
-  
+
   try {
-    const response = await fetch(
-      `/api/projects/${props.projectId}/data-browser/create-folder`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          path: currentPath.value,
-          folder_name: newFolderName.value.trim()
-        })
-      }
-    )
-    
+    let url, body
+    if (props.mode === 'filesystem') {
+      url = '/api/fs-create-folder'
+      body = { parent_path: currentPath.value, folder_name: newFolderName.value.trim() }
+    } else {
+      url = `/api/projects/${props.projectId}/data-browser/create-folder`
+      body = { path: currentPath.value, folder_name: newFolderName.value.trim() }
+    }
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
     if (!response.ok) {
       const data = await response.json()
       throw new Error(data.detail || 'Failed to create folder')
     }
-    
-    // Success - close dialog and refresh
+
     showCreateFolderDialog.value = false
     newFolderName.value = ''
     await loadDirectory(currentPath.value)
@@ -448,7 +493,11 @@ async function deleteFolder() {
 // Load directory when dialog opens
 watch(() => props.modelValue, (isOpen) => {
   if (isOpen) {
-    loadDirectory(currentPath.value)
+    // On first open in filesystem mode, start at initialPath
+    const startPath = (props.mode === 'filesystem' && !currentPath.value && props.initialPath)
+      ? props.initialPath
+      : currentPath.value
+    loadDirectory(startPath)
   }
 })
 </script>

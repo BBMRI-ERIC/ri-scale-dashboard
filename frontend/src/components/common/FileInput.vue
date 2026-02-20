@@ -17,6 +17,7 @@
         icon
         size="small"
         variant="text"
+        :loading="isResolvingRoot"
         @click="openFileDialog"
         title="Browse files"
         class="file-browse-btn"
@@ -29,6 +30,8 @@
     <FileDialog
       v-model="fileDialogOpen"
       :project-id="projectId"
+      :mode="dialogMode"
+      :initial-path="dataRoot"
       title="Select Data File or Directory"
       @select="onFileSelected"
     />
@@ -36,7 +39,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import FileDialog from '@/components/common/FileDialog.vue'
 
 const props = defineProps({
@@ -69,8 +72,38 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue'])
 
 const fileDialogOpen = ref(false)
+const dataRoot = ref('')
+const isResolvingRoot = ref(false)
 
-function openFileDialog() {
+// Module-level cache so we only fetch once across all FileInput instances
+let _cachedDataRoot = null
+
+async function resolveDataRoot() {
+  if (_cachedDataRoot !== null) return _cachedDataRoot
+  try {
+    const resp = await fetch('/api/config/data-root')
+    if (resp.ok) {
+      const data = await resp.json()
+      _cachedDataRoot = data.path || ''
+    } else {
+      _cachedDataRoot = ''
+    }
+  } catch {
+    _cachedDataRoot = ''
+  }
+  return _cachedDataRoot
+}
+
+const dialogMode = computed(() => dataRoot.value ? 'filesystem' : 'project')
+
+async function openFileDialog() {
+  if (_cachedDataRoot === null) {
+    isResolvingRoot.value = true
+    dataRoot.value = await resolveDataRoot()
+    isResolvingRoot.value = false
+  } else {
+    dataRoot.value = _cachedDataRoot
+  }
   fileDialogOpen.value = true
 }
 

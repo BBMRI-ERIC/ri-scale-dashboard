@@ -15,20 +15,52 @@
             <p class="section-subtitle">Design your data processing pipeline by arranging stages visually</p>
           </div>
           <div class="actions">
-            <v-btn 
-              variant="tonal" 
+            <v-btn
+              variant="tonal"
               prepend-icon="mdi-content-save-outline"
               @click="handleSave"
               :disabled="!loadedPipelineId"
             >
               Save
             </v-btn>
-            <v-btn 
-              variant="tonal" 
+            <v-btn
+              variant="tonal"
               prepend-icon="mdi-content-save-edit-outline"
               @click="showSaveAsDialog"
             >
               Save As
+            </v-btn>
+
+            <v-divider vertical class="mx-1" />
+
+            <v-switch
+              v-model="runSimulated"
+              label="Simulate"
+              color="warning"
+              hide-details
+              density="compact"
+              class="run-sim-switch"
+            />
+
+            <v-btn
+              v-if="!isRunActive"
+              color="success"
+              variant="tonal"
+              prepend-icon="mdi-play"
+              :disabled="stages.length === 0"
+              @click="startRun"
+            >
+              Run
+            </v-btn>
+            <v-btn
+              v-else
+              color="error"
+              variant="tonal"
+              prepend-icon="mdi-stop"
+              :loading="activeRunStatus === 'cancelling'"
+              @click="stopRun"
+            >
+              Stop
             </v-btn>
           </div>
         </div>
@@ -529,12 +561,58 @@
         </v-row>
       </div>
     </v-main>
+
+    <!-- Log Drawer (fixed bottom) -->
+    <div v-if="logDrawerOpen" class="log-drawer" :style="{ left: sidebarRail ? '56px' : '256px' }">
+      <div class="log-drawer-header">
+        <div class="log-drawer-title">
+          <v-icon size="16" class="mr-2">mdi-console</v-icon>
+          <span>{{ activeRunName }}</span>
+          <v-chip
+            :color="runStatusColor(activeRunStatus)"
+            size="x-small"
+            variant="tonal"
+            class="ml-2"
+          >{{ activeRunStatus }}</v-chip>
+        </div>
+        <div class="log-drawer-actions">
+          <v-btn
+            v-if="isRunActive"
+            size="small"
+            variant="text"
+            color="error"
+            :loading="activeRunStatus === 'cancelling'"
+            @click="stopRun"
+          >Stop</v-btn>
+          <v-btn icon size="x-small" variant="text" @click="logDrawerOpen = false">
+            <v-icon>mdi-chevron-down</v-icon>
+          </v-btn>
+        </div>
+      </div>
+      <div class="log-output" ref="logOutputEl">
+        <pre class="log-text">{{ activeRunLogs || '(waiting for output…)' }}</pre>
+      </div>
+    </div>
+
+    <!-- Re-open log drawer button when minimised -->
+    <v-btn
+      v-if="!logDrawerOpen && activeRunId"
+      class="log-reopen-btn"
+      size="small"
+      variant="tonal"
+      :color="runStatusColor(activeRunStatus)"
+      prepend-icon="mdi-console"
+      @click="logDrawerOpen = true"
+    >
+      {{ activeRunName }} · {{ activeRunStatus }}
+    </v-btn>
+
   </v-layout>
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { ref, computed, watch, onMounted, nextTick, onUnmounted } from 'vue'
+import { useRoute, onBeforeRouteLeave } from 'vue-router'
 import yaml from 'js-yaml'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import AppHeader from '@/components/layout/AppHeader.vue'
@@ -545,7 +623,7 @@ import SourcesPanel from '@/components/pipeline/SourcesPanel.vue'
 import { STEP_TYPES_CONFIG, getStepTypeConfig } from '@/configs/step_types_config.js'
 import { useProjectsStore } from '@/stores/projects.js'
 import { useAuthStore } from '@/stores/auth.js'
-import { savePipeline, listPipelines, loadPipeline, updatePipeline, getSourceColumns } from '@/services/pipelines.js'
+import { savePipeline, listPipelines, loadPipeline, updatePipeline, getSourceColumns, runPipeline, getRun, cancelRun } from '@/services/pipelines.js'
 
 const route = useRoute()
 const projectsStore = useProjectsStore()
@@ -1742,6 +1820,114 @@ function rebuildRegistryFromStages() {
   fieldRegistry.value = newRegistry
 }
 
+// ─── Direct run state ─────────────────────────────────────────────────────────
+const activeRunId = ref(null)
+const activeRunStatus = ref(null)
+const activeRunLogs = ref('')
+const activeRunName = ref('')
+const runSimulated = ref(false)
+const logDrawerOpen = ref(false)
+const pollTimer = ref(null)
+const logOutputEl = ref(null)
+
+const isRunActive = computed(() =>
+  ['starting', 'running', 'cancelling'].includes(activeRunStatus.value)
+)
+
+const runStatusColor = (status) => {
+  const map = { running: 'primary', completed: 'success', failed: 'error', cancelled: 'warning', cancelling: 'warning', starting: 'grey' }
+  return map[status] || 'grey'
+}
+
+function startPolling() {
+  stopPolling()
+  pollTimer.value = setInterval(async () => {
+    if (!activeRunId.value) return
+    try {
+      const result = await getRun(activeRunId.value)
+      const run = result.run
+      activeRunStatus.value = run.status
+      activeRunLogs.value = run.logs || ''
+      scrollLogsToBottom()
+      if (!['starting', 'running', 'cancelling'].includes(run.status)) {
+        stopPolling()
+      }
+    } catch (err) {
+      console.error('Failed to poll run status:', err)
+    }
+  }, 1000)
+}
+
+function stopPolling() {
+  if (pollTimer.value) {
+    clearInterval(pollTimer.value)
+    pollTimer.value = null
+  }
+}
+
+function scrollLogsToBottom() {
+  nextTick(() => {
+    if (logOutputEl.value) {
+      logOutputEl.value.scrollTop = logOutputEl.value.scrollHeight
+    }
+  })
+}
+
+async function startRun() {
+  const project = projectsStore.selectedProject
+  if (!project) {
+    alert('Please select a project first')
+    return
+  }
+  if (stages.value.length === 0) return
+
+  const manifest = buildManifestFromStages()
+  activeRunLogs.value = ''
+  activeRunStatus.value = 'starting'
+  activeRunName.value = pipelineName.value || 'Unsaved pipeline'
+  logDrawerOpen.value = true
+
+  try {
+    const result = await runPipeline({
+      manifest,
+      simulated: runSimulated.value,
+      pipeline_id: loadedPipelineId.value || null,
+      pipeline_name: pipelineName.value || 'Unsaved pipeline',
+      project_id: project.id,
+    })
+    activeRunId.value = result.run_id
+    startPolling()
+  } catch (err) {
+    activeRunStatus.value = 'failed'
+    activeRunLogs.value = `Failed to start run: ${err.message}`
+  }
+}
+
+async function stopRun() {
+  if (!activeRunId.value) return
+  try {
+    await cancelRun(activeRunId.value)
+    activeRunStatus.value = 'cancelling'
+  } catch (err) {
+    console.error('Failed to cancel run:', err)
+  }
+}
+
+onBeforeRouteLeave((_to, _from, next) => {
+  if (isRunActive.value) {
+    const leave = confirm(
+      'A pipeline is still running.\n\nThe run will continue in the background and can be monitored from the DPS Pipelines page.\n\nLeave anyway?'
+    )
+    if (!leave) { next(false); return }
+  }
+  stopPolling()
+  next()
+})
+
+onUnmounted(() => {
+  stopPolling()
+})
+
 // Check for route params on mount to load a pipeline
 onMounted(async () => {
   const projectId = route.query.project
@@ -1955,5 +2141,69 @@ onMounted(async () => {
   margin-top: 8px;
   color: #ef4444;
   font-size: 0.875rem;
+}
+
+// Run controls
+.run-sim-switch {
+  align-self: center;
+  font-size: 0.8125rem;
+}
+
+// Log drawer
+.log-drawer {
+  position: fixed;
+  bottom: 0;
+  right: 0;
+  z-index: 200;
+  transition: left 0.2s ease;
+  background: #0d1117;
+  border-top: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 12px 12px 0 0;
+  box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.4);
+}
+
+.log-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.log-drawer-title {
+  display: flex;
+  align-items: center;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #94a3b8;
+}
+
+.log-drawer-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.log-output {
+  height: 280px;
+  overflow-x: auto;
+  overflow-y: auto;
+  padding: 12px 16px;
+}
+
+.log-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #94a3b8;
+  white-space: pre;
+  margin: 0;
+}
+
+.log-reopen-btn {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  z-index: 200;
 }
 </style>

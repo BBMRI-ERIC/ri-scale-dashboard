@@ -21,7 +21,7 @@ class LazyRow:
             if loader == None:
                 value = self._row[key]
             else:
-                value = loader(self._row)
+                value = loader(self._row[key])
             
             self._cache[key] = value
                 
@@ -127,6 +127,11 @@ class LazyDataFrame():
             result[col] = series.to_list()
         return result
     
+    def dropna(self, **kwargs):
+        """Drop rows with NaN values, preserving field loaders."""
+        cleaned = self._dataframe.dropna(**kwargs)
+        return LazyDataFrame(cleaned, field_loaders=self._field_loaders)
+
     def merge(self, right, how="inner", on=None, left_on=None, right_on=None, left_index=False, right_index=False, sort=False, suffixes=('_x', '_y'), copy=True, indicator=False, validate=None):
         """
         Merge two DataFrames and combine field loaders from LazyDataFrame inputs.
