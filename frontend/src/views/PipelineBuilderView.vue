@@ -17,61 +17,26 @@
           <div class="actions">
             <v-btn 
               variant="tonal" 
-              prepend-icon="mdi-folder-open-outline"
-              @click="showLoadDialog"
+              prepend-icon="mdi-content-save-outline"
+              @click="handleSave"
+              :disabled="!loadedPipelineId"
             >
-              Load Pipeline
+              Save
             </v-btn>
             <v-btn 
               variant="tonal" 
-              prepend-icon="mdi-content-save-outline"
-              @click="showSaveDialog"
+              prepend-icon="mdi-content-save-edit-outline"
+              @click="showSaveAsDialog"
             >
-              Save Pipeline
+              Save As
             </v-btn>
           </div>
         </div>
 
-        <!-- Load Pipeline Dialog -->
-        <v-dialog v-model="loadDialogOpen" max-width="500px">
-          <v-card>
-            <v-card-title>Load Pipeline</v-card-title>
-            <v-divider />
-            <v-card-text class="pt-6">
-              <div class="text-subtitle-2 mb-2">Project</div>
-              <div class="text-body-2 mb-4">{{ selectedProjectName }}</div>
-
-              <div v-if="isLoadingPipelines" class="text-center py-4">
-                <v-progress-circular indeterminate color="primary" />
-              </div>
-              <div v-else-if="savedPipelines.length === 0" class="text-center py-4 text-body-2">
-                No saved pipelines found for this project
-              </div>
-              <v-list v-else density="comfortable" class="bg-transparent">
-                <v-list-item
-                  v-for="pipeline in savedPipelines"
-                  :key="pipeline.id"
-                  :title="pipeline.name"
-                  :subtitle="`Saved ${new Date(pipeline.created_at * 1000).toLocaleDateString()}`"
-                  @click="loadSelectedPipeline(pipeline.id)"
-                  class="cursor-pointer"
-                  style="border: 1px solid var(--v-border-color); border-radius: 4px; margin-bottom: 8px;"
-                />
-              </v-list>
-              <div v-if="loadError" class="text-error text-caption mt-2 mb-4">{{ loadError }}</div>
-            </v-card-text>
-            <v-divider />
-            <v-card-actions>
-              <v-spacer />
-              <v-btn variant="plain" @click="loadDialogOpen = false">Cancel</v-btn>
-            </v-card-actions>
-          </v-card>
-        </v-dialog>
-
-        <!-- Save Pipeline Dialog -->
+        <!-- Save As Dialog -->
         <v-dialog v-model="saveDialogOpen" max-width="600px">
           <v-card>
-            <v-card-title>Save Pipeline</v-card-title>
+            <v-card-title>Save Pipeline As</v-card-title>
             <v-divider />
             <v-card-text class="pt-6">
               <div class="text-subtitle-2 mb-2">Project</div>
@@ -139,6 +104,10 @@
         <v-row>
           <!-- Stage Library Panel -->
           <v-col cols="12" md="3">
+            <!-- Available Sources Panel -->
+            <SourcesPanel :sources="availableSources" class="mb-4" />
+            
+            <!-- Stage Library -->
             <v-card class="glass" :elevation="0">
               <v-card-title class="text-subtitle-1">Stage Library</v-card-title>
               <v-divider />
@@ -314,7 +283,45 @@
                     <div class="text-subtitle-2 mb-2" style="margin-left: 12px;">Inputs</div>
                     <div class="text-caption text-medium-emphasis mb-3" style="margin-left: 12px;">Values are substituted into the chain steps.</div>
                     <template v-for="sub in selectedChainFormInputs || []" :key="sub.name">
+                      <!-- Use registry source as dropdown if specified -->
+                      <v-select
+                        v-if="sub.use_registry_source"
+                        v-model="selectedStage.config.userInputs[sub.name]"
+                        :label="sub.label || sub.name"
+                        :placeholder="sub.default || ''"
+                        :hint="sub.helpText"
+                        :items="getRegisteredValues(sub.use_registry_source)"
+                        variant="outlined"
+                        density="compact"
+                        class="mb-3"
+                        style="margin-left: 12px;"
+                      />
+                      <!-- Column selector for column type substitutions -->
+                      <ColumnSelector
+                        v-else-if="sub.type === 'column'"
+                        v-model="selectedStage.config.userInputs[sub.name]"
+                        :label="sub.label || sub.name"
+                        :hint="sub.helpText"
+                        :source-name="getChainColumnSourceName(sub)"
+                        :available-sources="availableSources"
+                        :placeholder="sub.default || 'Select column...'"
+                        class="mb-3"
+                        style="margin-left: 12px;"
+                      />
+                      <!-- File input with dialog for path fields -->
+                      <FileInput
+                        v-else-if="shouldShowFileDialogForChainInput(sub)"
+                        v-model="selectedStage.config.userInputs[sub.name]"
+                        :label="sub.label || sub.name"
+                        :placeholder="sub.default || 'Browse or enter path...'"
+                        :hint="sub.helpText"
+                        :project-id="projectsStore.selectedProjectId"
+                        style="margin-left: 12px;"
+                        class="mb-3"
+                      />
+                      <!-- Regular text input for non-registry fields -->
                       <v-text-field
+                        v-else
                         v-model="selectedStage.config.userInputs[sub.name]"
                         :label="sub.label || sub.name"
                         :placeholder="sub.default || ''"
@@ -330,7 +337,7 @@
                       <div class="text-subtitle-2 mb-2">Chain Steps:</div>
                       <ul>
                         <li v-for="(step, idx) in selectedChainDefinition?.chain || []" :key="idx">
-                          {{ getStepTypeConfig(step.type)?.displayName || step.type }}
+                          {{ getStepTypeConfig(step.type)?.display_name || step.type }}
                         </li>
                       </ul>
                     </div>
@@ -365,12 +372,34 @@
                       
                       <template v-for="(paramConfig, paramKey) in selectedStageConfig.params" :key="paramKey">
                         <div v-if="shouldShowParam(paramKey, paramConfig)" class="param-field mb-3">
-                          <!-- String fields -->
-                          <v-text-field
-                            v-if="paramConfig.type === 'string'"
+                          <!-- String fields with column selector -->
+                          <ColumnSelector
+                            v-if="paramConfig.type === 'string' && shouldShowColumnSelector(paramConfig)"
                             v-model="selectedStage.config[paramKey]"
                             :label="paramConfig.label"
-                            :hint="paramConfig.helpText"
+                            :hint="paramConfig.help_text || paramConfig.helpText"
+                            :source-name="getColumnSelectorSourceName(paramConfig)"
+                            :available-sources="availableSources"
+                            :placeholder="getParamPlaceholder(paramConfig)"
+                          />
+                          
+                          <!-- String fields with file dialog -->
+                          <FileInput
+                            v-else-if="paramConfig.type === 'string' && shouldShowFileDialog(paramConfig)"
+                            v-model="selectedStage.config[paramKey]"
+                            :label="paramConfig.label"
+                            :placeholder="getParamPlaceholder(paramConfig)"
+                            :hint="paramConfig.help_text || paramConfig.helpText"
+                            :required="isParamRequiredForStage(paramKey, paramConfig)"
+                            :project-id="projectsStore.selectedProjectId"
+                          />
+                          
+                          <!-- Regular string fields -->
+                          <v-text-field
+                            v-else-if="paramConfig.type === 'string'"
+                            v-model="selectedStage.config[paramKey]"
+                            :label="paramConfig.label"
+                            :hint="paramConfig.help_text || paramConfig.helpText"
                             :placeholder="getParamPlaceholder(paramConfig)"
                             :required="isParamRequiredForStage(paramKey, paramConfig)"
                             variant="outlined"
@@ -383,7 +412,7 @@
                             v-else-if="paramConfig.type === 'boolean'"
                             v-model="selectedStage.config[paramKey]"
                             :label="paramConfig.label"
-                            :hint="paramConfig.helpText"
+                            :hint="paramConfig.help_text || paramConfig.helpText"
                             color="primary"
                             persistent-hint
                             hide-details="auto"
@@ -394,8 +423,8 @@
                             v-else-if="paramConfig.type === 'enum'"
                             v-model="selectedStage.config[paramKey]"
                             :label="paramConfig.label"
-                            :hint="paramConfig.helpText"
-                            :items="paramConfig.enumValues"
+                            :hint="paramConfig.help_text || paramConfig.helpText"
+                            :items="getEnumItemsForField(paramConfig)"
                             item-title="label"
                             item-value="value"
                             :required="isParamRequiredForStage(paramKey, paramConfig)"
@@ -409,24 +438,45 @@
                             <v-expansion-panel>
                               <v-expansion-panel-title>
                                 {{ paramConfig.label }}
-                                <template v-if="paramConfig.helpText">
+                                <template v-if="paramConfig.help_text || paramConfig.helpText">
                                   <v-tooltip location="top">
                                     <template v-slot:activator="{ props }">
                                       <v-icon v-bind="props" size="small" class="ml-2">mdi-help-circle-outline</v-icon>
                                     </template>
-                                    {{ paramConfig.helpText }}
+                                    {{ paramConfig.help_text || paramConfig.helpText }}
                                   </v-tooltip>
                                 </template>
                               </v-expansion-panel-title>
                               <v-expansion-panel-text>
                                 <template v-for="(subParamConfig, subParamKey) in getObjectSubParams(paramConfig)" :key="subParamKey">
                                   <div v-if="shouldShowParam(subParamKey, subParamConfig)" class="mb-3">
-                                    <!-- String sub-fields -->
-                                    <v-text-field
-                                      v-if="subParamConfig.type === 'string'"
+                                    <!-- String sub-fields with column selector -->
+                                    <ColumnSelector
+                                      v-if="subParamConfig.type === 'string' && shouldShowColumnSelector(subParamConfig)"
                                       v-model="getOrCreateNestedParam(paramKey)[subParamKey]"
                                       :label="subParamConfig.label"
-                                      :hint="subParamConfig.helpText"
+                                      :hint="subParamConfig.help_text || subParamConfig.helpText"
+                                      :source-name="getColumnSelectorSourceName(subParamConfig)"
+                                      :available-sources="availableSources"
+                                      :placeholder="getParamPlaceholder(subParamConfig)"
+                                    />
+                                    
+                                    <!-- String sub-fields with file dialog -->
+                                    <FileInput
+                                      v-else-if="subParamConfig.type === 'string' && shouldShowFileDialog(subParamConfig)"
+                                      v-model="getOrCreateNestedParam(paramKey)[subParamKey]"
+                                      :label="subParamConfig.label"
+                                      :placeholder="getParamPlaceholder(subParamConfig)"
+                                      :hint="subParamConfig.help_text || subParamConfig.helpText"
+                                      :project-id="projectsStore.selectedProjectId"
+                                    />
+                                    
+                                    <!-- Regular string sub-fields -->
+                                    <v-text-field
+                                      v-else-if="subParamConfig.type === 'string'"
+                                      v-model="getOrCreateNestedParam(paramKey)[subParamKey]"
+                                      :label="subParamConfig.label"
+                                      :hint="subParamConfig.help_text || subParamConfig.helpText"
                                       :placeholder="getParamPlaceholder(subParamConfig)"
                                       variant="outlined"
                                       density="compact"
@@ -438,7 +488,7 @@
                                       v-else-if="subParamConfig.type === 'boolean'"
                                       v-model="getOrCreateNestedParam(paramKey)[subParamKey]"
                                       :label="subParamConfig.label"
-                                      :hint="subParamConfig.helpText"
+                                      :hint="subParamConfig.help_text || subParamConfig.helpText"
                                       color="primary"
                                       persistent-hint
                                       hide-details="auto"
@@ -483,15 +533,21 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import yaml from 'js-yaml'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import AppHeader from '@/components/layout/AppHeader.vue'
+import FileInput from '@/components/common/FileInput.vue'
+import ColumnSelector from '@/components/common/ColumnSelector.vue'
+import SourceColumnSelector from '@/components/common/SourceColumnSelector.vue'
+import SourcesPanel from '@/components/pipeline/SourcesPanel.vue'
 import { STEP_TYPES_CONFIG, getStepTypeConfig } from '@/configs/step_types_config.js'
 import { useProjectsStore } from '@/stores/projects.js'
 import { useAuthStore } from '@/stores/auth.js'
-import { savePipeline, listPipelines, loadPipeline, updatePipeline } from '@/services/pipelines.js'
+import { savePipeline, listPipelines, loadPipeline, updatePipeline, getSourceColumns } from '@/services/pipelines.js'
 
+const route = useRoute()
 const projectsStore = useProjectsStore()
 const authStore = useAuthStore()
 const sidebarRail = ref(false)
@@ -503,6 +559,7 @@ const yamlDirty = ref(false)
 const isSyncingFromStages = ref(false)
 const isSyncingFromYaml = ref(false)
 let yamlParseTimer = null
+let sourceColumnsTimer = null
 
 // Save dialog state
 const saveDialogOpen = ref(false)
@@ -512,11 +569,9 @@ const isSaving = ref(false)
 const savedPipelinesForSave = ref([])
 const isSavingDialogLoading = ref(false)
 
-// Load dialog state
-const loadDialogOpen = ref(false)
-const savedPipelines = ref([])
-const isLoadingPipelines = ref(false)
-const loadError = ref('')
+// Currently loaded pipeline tracking
+const loadedPipelineId = ref(null)
+const loadedPipelineProjectId = ref(null)
 
 // Overwrite dialog state
 const overwriteDialogOpen = ref(false)
@@ -529,14 +584,14 @@ const selectedProjectName = computed(() => {
 
 // Build stage library from shared config (step types + command chains)
 const stageLibrary = computed(() => {
-  const stepTypes = STEP_TYPES_CONFIG.stepTypes || {}
-  const chains = STEP_TYPES_CONFIG.commandChains || {}
+  const stepTypes = STEP_TYPES_CONFIG.step_types || {}
+  const chains = STEP_TYPES_CONFIG.command_chains || {}
 
   const typeEntries = Object.keys(stepTypes).map(key => ({
-    name: stepTypes[key].displayName,
-    type: stepTypes[key].backendType || key,
+    name: stepTypes[key].display_name,
+    type: stepTypes[key].backend_type || key,
     icon: stepTypes[key].icon,
-    description: `Type: ${stepTypes[key].backendType || key} - ${stepTypes[key].description}`,
+    description: `Type: ${stepTypes[key].backend_type || key} - ${stepTypes[key].description}`,
     isChain: false,
   }))
 
@@ -545,12 +600,12 @@ const stageLibrary = computed(() => {
     // Map substitutions to a userInputs object for form binding (include per_row column selectors)
     const userInputs = (chainDef.substitutions || [])
       .reduce((acc, s) => {
-        acc[s.name] = { name: s.name, label: s.label, default: s.default, helpText: s.help_text || s.helpText, scope: s.scope }
+        acc[s.name] = { name: s.name, label: s.label, default: s.default, helpText: s.help_text, scope: s.scope }
         return acc
       }, {})
 
     return {
-      name: chainDef.displayName || key,
+      name: chainDef.display_name || key,
       type: 'command_chain',
       icon: chainDef.icon || 'mdi-source-merge',
       description: chainDef.description || 'Composite command chain',
@@ -583,6 +638,81 @@ const stageLibrary = computed(() => {
 // Pipeline stages
 const stages = ref([])
 
+// Field Registry: Maps registry IDs to arrays of registered values
+// e.g., { "sources": ["source1", "wsi_source", "labels"] }
+// Fields with register_id add their values here, fields with use_registry_source read from here
+const fieldRegistry = ref({})
+
+// Source tracking: Extract available data sources from pipeline steps
+// This provides column name suggestions for fields that reference source columns
+const sourceColumnCache = ref({})
+
+const availableSources = computed(() => {
+  // Get all registered sources (sources that have register_id in config)
+  const registeredSourceNames = getRegisteredValues('sources')
+  
+  // Build source objects with columns from cache
+  return registeredSourceNames.map(name => ({
+    source_name: name,
+    columns: sourceColumnCache.value[name] || []
+  }))
+})
+
+// Helper to add a value to the registry
+function registerFieldValue(registryId, value) {
+  if (!registryId || !value) return
+  if (!fieldRegistry.value[registryId]) {
+    fieldRegistry.value[registryId] = []
+  }
+  // Add value if not already present (avoid duplicates)
+  if (!fieldRegistry.value[registryId].includes(value)) {
+    fieldRegistry.value[registryId].push(value)
+  }
+}
+
+// Helper to get registered values for a registry ID
+function getRegisteredValues(registryId) {
+  return fieldRegistry.value[registryId] || []
+}
+
+// Helper to clear the registry (useful when loading a new pipeline)
+function clearRegistry() {
+  fieldRegistry.value = {}
+}
+
+async function refreshSourceColumnsFromServer() {
+  const registeredSourceNames = getRegisteredValues('sources')
+  
+  if (registeredSourceNames.length === 0) {
+    sourceColumnCache.value = {}
+    return
+  }
+
+  try {
+    const manifest = buildManifestFromStages()
+    const response = await getSourceColumns(manifest)
+    const responseSources = response?.sources || {}
+    
+    // Update cache with columns for ALL registered sources
+    const nextCache = {}
+    registeredSourceNames.forEach(name => {
+      nextCache[name] = responseSources[name] || []
+    })
+    sourceColumnCache.value = nextCache
+  } catch (err) {
+    console.error('Failed to refresh source columns:', err)
+  }
+}
+
+function scheduleSourceColumnsRefresh() {
+  if (sourceColumnsTimer) {
+    clearTimeout(sourceColumnsTimer)
+  }
+  sourceColumnsTimer = setTimeout(() => {
+    refreshSourceColumnsFromServer()
+  }, 400)
+}
+
 // Selected stage for configuration
 const selectedStageId = ref(null)
 const selectedStage = computed(() => {
@@ -607,30 +737,56 @@ const selectedChainUserInputs = computed(() => {
   if (!def) return []
   const subs = def.substitutions || []
   // include all substitutions (form-scoped and per_row) so column name selectors are shown
-  return subs.map(s => ({ name: s.name, label: s.label, default: s.default, helpText: s.help_text || s.helpText, scope: s.scope }))
+  return subs.map(s => ({ 
+    name: s.name, 
+    label: s.label, 
+    default: s.default, 
+    helpText: s.help_text, 
+    scope: s.scope,
+    type: s.type,
+    open_file_dialog: s.open_file_dialog,
+    source: s.source // Source configuration for column type substitutions
+  }))
 })
 
 // Expose step parameter exposures that are visible and resolved at form time
 const selectedChainExposures = computed(() => {
   const def = selectedChainDefinition.value
   if (!def) return []
-  const exposures = def.step_param_exposure || def.stepParamExposure || []
+  const exposures = def.step_param_exposure || []
   return exposures
-    .filter(e => e.visible === true && (e.resolve_timing === 'form' || e.resolveTiming === 'form' || !e.resolve_timing))
+    .filter(e => e.visible === true && (e.resolve_timing === 'form' || !e.resolve_timing))
     .map(e => {
-      const stepId = e.step_id || e.stepId || e.stepId || 'step'
-      const param = e.param || e.paramName || e.param_name || 'param'
+      const stepId = e.step_id || 'step'
+      const param = e.param || e.param_name || 'param'
       const name = `${stepId}.${param.replace(/\./g, '_')}`
-      return { name, label: e.label || `${stepId} ${param}`, default: e.default, helpText: e.help_text || e.helpText, stepId, param }
+      return { 
+        name, 
+        label: e.label || `${stepId} ${param}`, 
+        default: e.default, 
+        helpText: e.help_text, 
+        stepId, 
+        param,
+        use_registry_source: e.use_registry_source,
+        register_id: e.register_id
+      }
     })
 })
 
 const selectedChainFormInputs = computed(() => {
-  // merge form-scoped substitutions and visible exposures; exposures may override if same name
-  const map = {}
-  selectedChainUserInputs.value.forEach(s => { map[s.name] = s })
-  selectedChainExposures.value.forEach(e => { map[e.name] = e })
-  return Object.values(map)
+  const inputs = []
+  
+  // Add all substitutions
+  selectedChainUserInputs.value.forEach(s => {
+    inputs.push({ ...s, isSubstitution: true })
+  })
+  
+  // Add visible exposures
+  selectedChainExposures.value.forEach(e => {
+    inputs.push({ ...e, isExposure: true })
+  })
+  
+  return inputs
 })
 
 // Generate unique ID for stages
@@ -685,15 +841,15 @@ function createChainStage(definition) {
   const chainDef = getChainDefinition(definition.chainKey)
   const defaults = {}
 
-  // Defaults from substitutions (include per_row so column selectors are initialised)
+  // Initialize substitutions
   const subs = (chainDef?.substitutions || [])
   subs.forEach(s => { defaults[s.name] = s.default ?? '' })
-
-  // Defaults from step parameter exposures that resolve at form time
-  const exposures = chainDef?.step_param_exposure || chainDef?.stepParamExposure || []
-  exposures.filter(e => (e.resolve_timing === 'form' || e.resolveTiming === 'form') ).forEach(e => {
-    const stepId = e.step_id || e.stepId || e.stepId
-    const param = e.param || e.paramName || e.param_name || 'param'
+  
+  // Initialize visible exposures (these are direct form inputs)
+  const exposures = chainDef?.step_param_exposure || []
+  exposures.filter(e => e.visible === true).forEach(e => {
+    const stepId = e.step_id
+    const param = e.param || e.param_name || 'param'
     const key = `${stepId}.${param.replace(/\./g, '_')}`
     defaults[key] = e.default ?? ''
   })
@@ -764,16 +920,12 @@ function buildObjectDefaults(paramConfig) {
   return nested
 }
 
-function toSnakeCase(str) {
-  return str.replace(/([A-Z])/g, '_$1').toLowerCase()
-}
-
 function isChainStage(stage) {
   return stage?.type === 'command_chain'
 }
 
 function getChainDefinition(chainKey) {
-  const chains = STEP_TYPES_CONFIG.commandChains || {}
+  const chains = STEP_TYPES_CONFIG.command_chains || {}
   return chains[chainKey]
 }
 
@@ -835,21 +987,40 @@ function moveStage(index, delta) {
   stages.value = newStages
 }
 
+// Helper: Get enum items for a field, considering registry sources
+function getEnumItemsForField(paramConfig) {
+  // If this field uses a registry source, build items from registered values
+  if (paramConfig.use_registry_source) {
+    const registryId = paramConfig.use_registry_source
+    const registeredValues = getRegisteredValues(registryId)
+    return registeredValues.map(value => ({
+      value: value,
+      label: value
+    }))
+  }
+  
+  // Otherwise use predefined enum values (support both snake_case and camelCase)
+  return paramConfig.enum_values || paramConfig.enumValues || []
+}
+
 // Helper: Check if a parameter should be shown based on conditional logic
 function shouldShowParam(paramKey, paramConfig) {
-  if (!paramConfig.conditionalOn) return true
+  const conditionalField = paramConfig.conditional_on || paramConfig.conditionalOn
+  if (!conditionalField) return true
   
-  const conditionalValue = selectedStage.value?.config?.[paramConfig.conditionalOn]
-  return conditionalValue === paramConfig.conditionalValue
+  const conditionalValue = selectedStage.value?.config?.[conditionalField]
+  const expectedValue = paramConfig.conditional_value || paramConfig.conditionalValue
+  return conditionalValue === expectedValue
 }
 
 // Helper: Check if a parameter is required
 function isParamRequiredForStage(paramKey, paramConfig) {
   if (paramConfig.required === true) return true
   
-  if (paramConfig.requiredWhen) {
+  const requiredWhen = paramConfig.required_when || paramConfig.requiredWhen
+  if (requiredWhen) {
     // Simple evaluation for common cases
-    const condition = paramConfig.requiredWhen
+    const condition = requiredWhen
     const formState = selectedStage.value?.config || {}
     
     // Parse conditions like "mode == 'discovery'" or "execution_mode == 'per_row'"
@@ -874,12 +1045,95 @@ function getParamPlaceholder(paramConfig) {
   return ''
 }
 
+// Helper: Check if a parameter should show file dialog
+function shouldShowFileDialog(paramConfig) {
+  return paramConfig.open_file_dialog === true
+}
+
+// Helper: Check if a parameter should use column selector
+function shouldShowColumnSelector(paramConfig) {
+  return paramConfig.use_column_selector === true
+}
+
+// Helper: Get the source name for a column selector field
+function getColumnSelectorSourceName(paramConfig) {
+  // If the parameter specifies a source field to read from, use that
+  if (paramConfig.column_source_field) {
+    return selectedStage.value?.config?.[paramConfig.column_source_field]
+  }
+  // Otherwise, try to infer from input_source_name parameter
+  return selectedStage.value?.config?.input_source_name
+}
+
+// Helper: Check if a chain input should show file dialog
+function shouldShowFileDialogForChainInput(input) {
+  // Check if the input is marked for file dialog (for substitutions)
+  if (input.open_file_dialog === true) return true
+  
+  // Check if this is a substitution with string type that looks like a path
+  if (input.isSubstitution && input.type === 'string' && input.open_file_dialog === true) {
+    return true
+  }
+  
+  // Check if this is an exposure that references a parameter with file dialog
+  if (input.isExposure && input.stepId && input.param) {
+    const chainDef = selectedChainDefinition.value
+    if (!chainDef) return false
+    
+    // Find the corresponding step in the chain
+    const chainSteps = chainDef.chain || []
+    const step = chainSteps.find(s => s.id === input.stepId)
+    if (!step) return false
+    
+    // Get the step type config
+    const stepTypeConfig = getStepTypeConfig(step.type)
+    if (!stepTypeConfig) return false
+    
+    // Navigate to the parameter (handle nested paths like 'columns.column_name')
+    const paramParts = input.param.split('.')
+    let paramConfig = stepTypeConfig.params
+    
+    for (const part of paramParts) {
+      if (!paramConfig || typeof paramConfig !== 'object') return false
+      paramConfig = paramConfig[part]
+    }
+    
+    // Check if this parameter has open_file_dialog
+    return paramConfig?.open_file_dialog === true
+  }
+  
+  return false
+}
+
+// Helper: Get the source name for a chain column substitution
+function getChainColumnSourceName(substitution) {
+  if (!substitution || !substitution.source) return ''
+  
+  const sourceConfig = substitution.source
+  
+  // Find the exposed parameter that contains the source name
+  const exposures = selectedChainDefinition.value?.step_param_exposure || []
+  const sourceExposure = exposures.find(
+    e => e.step_id === sourceConfig.step_id && e.param === sourceConfig.param
+  )
+  
+  if (!sourceExposure) return ''
+  
+  // Build the key for the userInputs
+  const stepId = sourceExposure.step_id
+  const param = sourceExposure.param || sourceExposure.param_name || 'param'
+  const key = `${stepId}.${param.replace(/\./g, '_')}`
+  
+  // Get the value from userInputs
+  return selectedStage.value?.config?.userInputs?.[key] || ''
+}
+
 // Helper: Get sub-parameters for object type fields
 function getObjectSubParams(paramConfig) {
   const subParams = {}
   for (const key in paramConfig) {
     if (key !== 'label' && key !== 'type' && key !== 'required' && 
-        key !== 'required_when' && key !== 'help_text' && key !== 'helpText' &&
+        key !== 'required_when' && key !== 'help_text' &&
         typeof paramConfig[key] === 'object' && paramConfig[key].type) {
       subParams[key] = paramConfig[key]
     }
@@ -895,8 +1149,35 @@ function getOrCreateNestedParam(paramKey) {
   return selectedStage.value.config[paramKey]
 }
 
-// Dialog management for pipeline save
-function showSaveDialog() {
+// Handle direct save (overwrites current pipeline)
+async function handleSave() {
+  if (!loadedPipelineId.value || !loadedPipelineProjectId.value) {
+    alert('No pipeline loaded to save')
+    return
+  }
+
+  if (!pipelineName.value) {
+    alert('Pipeline name is not set')
+    return
+  }
+
+  isSaving.value = true
+  try {
+    const manifest = buildManifestFromStages()
+    await updatePipeline(loadedPipelineProjectId.value, loadedPipelineId.value, manifest)
+    
+    console.log('Pipeline saved successfully')
+    alert(`Pipeline "${pipelineName.value}" saved successfully!`)
+  } catch (err) {
+    console.error('Error saving pipeline:', err)
+    alert(`Failed to save pipeline: ${err.message}`)
+  } finally {
+    isSaving.value = false
+  }
+}
+
+// Dialog management for save as
+function showSaveAsDialog() {
   const project = projectsStore.selectedProject
   if (!project) {
     alert('Please select a project first')
@@ -982,6 +1263,13 @@ async function performSavePipeline(isOverwrite = false) {
     saveDialogOpen.value = false
     overwriteDialogOpen.value = false
     
+    // Update loaded pipeline tracking if this was a new save
+    if (!isOverwrite && result.pipeline_id) {
+      loadedPipelineId.value = result.pipeline_id
+      loadedPipelineProjectId.value = project.id
+      pipelineName.value = pipelineName.value.trim()
+    }
+    
     // Show success message
     alert(`Pipeline "${pipelineName.value}" ${isOverwrite ? 'updated' : 'saved'} successfully!`)
   } catch (err) {
@@ -989,59 +1277,6 @@ async function performSavePipeline(isOverwrite = false) {
     saveError.value = err.message || 'Failed to save pipeline'
   } finally {
     isSaving.value = false
-  }
-}
-
-async function showLoadDialog() {
-  const project = projectsStore.selectedProject
-  if (!project) {
-    alert('Please select a project first')
-    return
-  }
-
-  loadError.value = ''
-  isLoadingPipelines.value = true
-  loadDialogOpen.value = true
-
-  try {
-    const result = await listPipelines(project.id)
-    savedPipelines.value = result.pipelines || []
-  } catch (err) {
-    console.error('Error listing pipelines:', err)
-    loadError.value = err.message || 'Failed to load pipelines'
-  } finally {
-    isLoadingPipelines.value = false
-  }
-}
-
-async function loadSelectedPipeline(pipelineId) {
-  const project = projectsStore.selectedProject
-  if (!project) {
-    loadError.value = 'No project selected'
-    return
-  }
-
-  try {
-    const result = await loadPipeline(project.id, pipelineId)
-    const manifest = result.manifest
-
-    // Clear current stages
-    stages.value = []
-    selectedStageId.value = null
-
-    // Convert manifest to YAML and set it, then apply to stages
-    yamlText.value = yaml.dump(manifest)
-    
-    // Reset sync flags and apply YAML to stages
-    isSyncingFromYaml.value = true
-    applyYamlToStages({ preserveSelection: false })
-    isSyncingFromYaml.value = false
-
-    loadDialogOpen.value = false
-    alert('Pipeline loaded successfully!')
-  } catch (err) {
-    console.error('Error loading pipeline:', err)
-    loadError.value = err.message || 'Failed to load pipeline'
   }
 }
 
@@ -1054,8 +1289,7 @@ function buildManifestFromStages() {
       if (!chainDef) return
       const inputs = s.config.userInputs || {}
 
-      // Exposures may be stored under camelCased or snake_case keys depending on parsing
-      const exposures = chainDef.stepParamExposure || chainDef.step_param_exposure || []
+      const exposures = chainDef.step_param_exposure || []
 
       const setNested = (obj, path, value) => {
         const parts = (path || '').split('.')
@@ -1073,24 +1307,36 @@ function buildManifestFromStages() {
 
       ;(chainDef.chain || []).forEach((stepEntry, idx) => {
         const stepType = stepEntry.type
-        const displayName = getStepTypeConfig(stepType)?.displayName || stepEntry.display_name || stepEntry.type || `Step ${idx + 1}`
+        const displayName = getStepTypeConfig(stepType)?.display_name || stepEntry.display_name || stepEntry.type || `Step ${idx + 1}`
 
         // Collect exposures for this step instance by step id
-        const stepExposures = (exposures || []).filter(e => (e.stepId === stepEntry.id) || (e.step_id === stepEntry.id) || (e.stepId === stepEntry.step_id))
+        const stepId = stepEntry.id || stepEntry.step_id || `step${idx}`
+        const stepExposures = (exposures || []).filter(e => (e.step_id === stepId))
 
-        // Build params from exposures (defaults may contain placeholders)
+        // Build params from exposures
         const paramsObj = {}
         stepExposures.forEach(exp => {
-          const paramPath = exp.param || exp.paramName || exp.param_name || ''
-          const resolved = resolvePlaceholders(exp.default, inputs)
-          if (paramPath) setNested(paramsObj, paramPath, resolved)
+          const paramPath = exp.param || exp.param_name || ''
+          const expStepId = exp.step_id || exp.stepId
+          const expKey = `${expStepId}.${paramPath.replace(/\./g, '_')}`
+          
+          let value
+          if (exp.visible === true) {
+            // For visible exposures, use the user-provided value directly
+            value = inputs[expKey] ?? exp.default
+          } else {
+            // For hidden exposures, use default with substitutions applied
+            value = resolvePlaceholders(exp.default, inputs)
+          }
+          
+          if (paramPath) setNested(paramsObj, paramPath, value)
         })
 
         jobSteps.push({
           step_name: displayName,
           type: stepType,
-          command_chain_type: s.config.command_chain_type || s.config.chainKey || chainDef.command_chain_type || chainDef.chainKey,
-          chain_command_name: s.config.chain_command_name || s.config.name || chainDef.display_name || chainDef.displayName || chainDef.chainKey,
+          command_chain_type: s.config.command_chain_type || s.config.chainKey,
+          chain_command_name: s.config.chain_command_name || s.config.name,
           enabled: s.config.enabled !== false,
           params: paramsObj,
         })
@@ -1103,7 +1349,7 @@ function buildManifestFromStages() {
     const { enabled, name, ...params } = (s.config || {})
     jobSteps.push({
       step_name: displayName,
-      type: s.type || guessStepType(s.name),
+      type: s.type,
       command_chain_type: s.config?.command_chain_type,
       chain_command_name: s.config?.chain_command_name,
       enabled: enabled !== false,
@@ -1118,13 +1364,6 @@ function buildManifestFromStages() {
     simulated: true,
     job_steps: jobSteps,
   }
-}
-
-function guessStepType(stageName) {
-  const normalized = (stageName || '').toLowerCase()
-  if (normalized.includes('ingest')) return 'load'
-  if (normalized.includes('join')) return 'join'
-  return 'custom'
 }
 
 function resetYamlFromStages() {
@@ -1190,20 +1429,17 @@ function applyYamlToStages({ preserveSelection = false } = {}) {
         const id = generateId()
         const chainKey = group.chainType
         const chainDef = getChainDefinition(chainKey)
+        
+        if (!chainDef) {
+          console.warn(`Chain definition not found for chainKey: "${chainKey}". Available chains:`, Object.keys(STEP_TYPES_CONFIG.command_chains || {}))
+        }
 
-        // Extract substitution values from step params by reverse-mapping step_param_exposure
+        // Extract substitution and visible exposure values from step params
         const userInputs = {}
-        const exposures = chainDef?.step_param_exposure || chainDef?.stepParamExposure || []
+        const exposures = chainDef?.step_param_exposure || []
+        const substitutions = chainDef?.substitutions || []
 
-        // Build a map of stepId.param -> exposure for quick lookup
-        const exposureMap = {}
-        exposures.forEach(e => {
-          const stepId = e.step_id || e.stepId
-          const param = e.param || e.paramName || e.param_name || ''
-          exposureMap[`${stepId}.${param}`] = e
-        })
-
-        // Extract param values from steps and map back to substitution names
+        // Helper to get nested values from params
         const getNested = (obj, path) => {
           const parts = (path || '').split('.')
           let cur = obj
@@ -1214,23 +1450,106 @@ function applyYamlToStages({ preserveSelection = false } = {}) {
           return cur
         }
 
-        group.steps.forEach((step, stepIdx) => {
-          const stepId = `run_dicom` // TODO: make this dynamic based on chain def or step id in group
-          const params = step.params || {}
-          for (const [paramPath, value] of Object.entries(params)) {
-            const key = `${stepId}.${paramPath}`
-            const exp = exposureMap[key]
-            if (exp) {
-              const substName = exp.label || paramPath
-              userInputs[substName] = value
+        const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+        const extractSubstitutionsFromTemplate = (template, actual) => {
+          if (typeof template !== 'string' || typeof actual !== 'string') return {}
+
+          const tokenRegex = /{{([^{}]+)}}|{([^{}]+)}/g
+          let lastIndex = 0
+          let match
+          let pattern = '^'
+          const keys = []
+
+          while ((match = tokenRegex.exec(template)) !== null) {
+            const [full, doubleKey, singleKey] = match
+            const key = doubleKey || singleKey
+            pattern += escapeRegex(template.slice(lastIndex, match.index))
+            if (doubleKey) {
+              // {{key}} resolves to {value}, keep braces in actual
+              pattern += '\\{(?<k' + keys.length + '>.+?)\\}'
+            } else {
+              // {key} resolves to value
+              pattern += '(?<k' + keys.length + '>.+?)'
             }
+            keys.push(key)
+            lastIndex = match.index + full.length
           }
+
+          pattern += escapeRegex(template.slice(lastIndex)) + '$'
+
+          try {
+            const regex = new RegExp(pattern)
+            const m = actual.match(regex)
+            if (!m || !m.groups) return {}
+            const extracted = {}
+            keys.forEach((k, i) => {
+              const value = m.groups[`k${i}`]
+              if (value !== undefined) extracted[k] = value
+            })
+            return extracted
+          } catch (err) {
+            return {}
+          }
+        }
+
+        // Extract values for visible exposures and try to reverse-engineer substitutions
+        group.steps.forEach((step, stepIdx) => {
+          const chainStep = (chainDef?.chain || [])[stepIdx]
+          if (!chainStep) return
+          
+          const stepId = chainStep.id || chainStep.step_id || `step${stepIdx}`
+          const stepExposures = exposures.filter(e => e.step_id === stepId)
+          
+          stepExposures.forEach(exp => {
+            const paramPath = exp.param || exp.param_name || ''
+            const actualValue = getNested(step.params || {}, paramPath)
+            
+            if (exp.visible === true) {
+              // For visible exposures, store the actual value directly
+              const expKey = `${stepId}.${paramPath.replace(/\./g, '_')}`
+              if (actualValue !== undefined) {
+                userInputs[expKey] = actualValue
+              }
+            } else {
+              // For hidden exposures, try to extract substitution values
+              const defaultTemplate = exp.default || ''
+              if (typeof actualValue === 'string' && typeof defaultTemplate === 'string') {
+                // Check if default is a simple placeholder like "{output_dir}"
+                const simpleMatch = defaultTemplate.match(/^{([^}]+)}$/)
+                if (simpleMatch) {
+                  const substName = simpleMatch[1]
+                  if (!userInputs.hasOwnProperty(substName)) {
+                    userInputs[substName] = actualValue
+                  }
+                } else if (defaultTemplate.includes('{')) {
+                  // More complex template with placeholders
+                  const extracted = extractSubstitutionsFromTemplate(defaultTemplate, actualValue)
+                  Object.entries(extracted).forEach(([k, v]) => {
+                    if (!userInputs.hasOwnProperty(k)) {
+                      userInputs[k] = v
+                    }
+                  })
+                }
+              }
+            }
+          })
         })
 
-        // Also preserve direct substitution values
-        ;(chainDef?.substitutions || []).forEach(s => {
+        // Initialize any missing substitutions with defaults
+        substitutions.forEach(s => {
           if (!userInputs.hasOwnProperty(s.name)) {
             userInputs[s.name] = s.default ?? ''
+          }
+        })
+        
+        // Initialize any missing visible exposures with defaults
+        exposures.filter(e => e.visible === true).forEach(e => {
+          const stepId = e.step_id
+          const param = e.param || e.param_name || ''
+          const expKey = `${stepId}.${param.replace(/\./g, '_')}`
+          if (!userInputs.hasOwnProperty(expKey)) {
+            userInputs[expKey] = e.default ?? ''
           }
         })
 
@@ -1257,7 +1576,7 @@ function applyYamlToStages({ preserveSelection = false } = {}) {
         return {
           id,
           name: stepName,
-          type: step.type || guessStepType(stepName),
+          type: step.type,
           config: {
             ...params,
             enabled: step.enabled !== false,
@@ -1345,6 +1664,110 @@ watch(
     selectedStage.value.name = newName
   }
 )
+
+// Watch for changes to stages and update registry for fields with register_id
+watch(
+  stages,
+  () => {
+    // Rebuild registry from all current stages
+    // This ensures registry stays in sync whenever stages change
+    rebuildRegistryFromStages()
+  },
+  { deep: true, immediate: false }
+)
+
+// Watch for changes to stages and refresh source columns from backend (CSV headers)
+watch(
+  stages,
+  () => {
+    if (isSyncingFromYaml.value) return
+    scheduleSourceColumnsRefresh()
+  },
+  { deep: true, immediate: true }
+)
+
+// Helper: Rebuild the registry from all stages
+function rebuildRegistryFromStages() {
+  const newRegistry = {}
+  
+  stages.value.forEach((stage) => {
+    if (isChainStage(stage)) {
+      // For chain stages, check step parameter exposures
+      const chainDef = getChainDefinition(stage.config.chainKey)
+      if (chainDef && chainDef.step_param_exposure) {
+        chainDef.step_param_exposure.forEach((exposure) => {
+          if (exposure.register_id) {
+            const registryId = exposure.register_id
+            // For exposures, use the computed key format
+            const stepId = exposure.step_id
+            const param = exposure.param || exposure.param_name || ''
+            const expKey = `${stepId}.${param.replace(/\./g, '_')}`
+            const value = stage.config.userInputs?.[expKey]
+            
+            if (value) {
+              if (!newRegistry[registryId]) {
+                newRegistry[registryId] = []
+              }
+              if (!newRegistry[registryId].includes(value)) {
+                newRegistry[registryId].push(value)
+              }
+            }
+          }
+        })
+      }
+    } else {
+      // For regular stages, check params
+      const typeConfig = getStepTypeConfig(stage.type)
+      if (!typeConfig || !typeConfig.params) return
+      
+      // Check all parameters in this step's config for register_id
+      Object.entries(typeConfig.params).forEach(([paramKey, paramConfig]) => {
+        if (paramConfig.register_id) {
+          const registryId = paramConfig.register_id
+          const value = stage.config[paramKey]
+          
+          if (value) {
+            if (!newRegistry[registryId]) {
+              newRegistry[registryId] = []
+            }
+            if (!newRegistry[registryId].includes(value)) {
+              newRegistry[registryId].push(value)
+            }
+          }
+        }
+      })
+    }
+  })
+  
+  fieldRegistry.value = newRegistry
+}
+
+// Check for route params on mount to load a pipeline
+onMounted(async () => {
+  const projectId = route.query.project
+  const pipelineId = route.query.pipeline
+  
+  if (projectId && pipelineId) {
+    try {
+      // Load the pipeline from the backend
+      const response = await loadPipeline(projectId, pipelineId)
+      if (response.manifest) {
+        // Convert manifest to YAML and apply to stages
+        const manifestYaml = yaml.dump(response.manifest)
+        yamlText.value = manifestYaml
+        applyYamlToStages({ preserveSelection: false })
+        
+        // Set the pipeline name and tracking info for future saves
+        pipelineName.value = response.name || pipelineId
+        loadedPipelineId.value = pipelineId
+        loadedPipelineProjectId.value = projectId
+      }
+    } catch (err) {
+      console.error('Failed to load pipeline from route params:', err)
+      // You could show a toast notification here
+    }
+  }
+})
 </script>
 
 <style scoped lang="scss">

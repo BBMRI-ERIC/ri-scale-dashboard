@@ -186,6 +186,15 @@
                     @click="viewJob(item)"
                   />
                   <v-btn
+                    v-if="item.status === 'queued' && item.jobType === 'Data Preparation'"
+                    icon="mdi-play"
+                    size="small"
+                    variant="text"
+                    color="success"
+                    @click="openExecuteDialog(item)"
+                    title="Execute job"
+                  />
+                  <v-btn
                     v-if="item.status === 'running'"
                     icon="mdi-stop"
                     size="small"
@@ -208,6 +217,15 @@
                     variant="text"
                     color="warning"
                     @click="retryJob(item)"
+                  />
+                  <v-btn
+                    v-if="item.status === 'completed'"
+                    icon="mdi-replay"
+                    size="small"
+                    variant="text"
+                    color="warning"
+                    @click="rerunJob(item)"
+                    title="Rerun job"
                   />
                   <v-btn
                     v-if="item.status === 'completed'"
@@ -261,6 +279,17 @@
               class="mb-4"
             />
             <v-select
+              v-if="isDataPreparation"
+              v-model="newJob.manifestId"
+              :items="fetchedManifests"
+              item-title="name"
+              item-value="id"
+              label="Manifest File"
+              :rules="[v => !!v || 'Manifest file is required']"
+              class="mb-4"
+            />
+            <v-select
+              v-if="!isDataPreparation"
               v-model="newJob.modelId"
               :items="availableModels"
               item-title="name"
@@ -270,6 +299,7 @@
               class="mb-4"
             />
             <v-select
+              v-if="!isDataPreparation"
               v-model="newJob.datasetId"
               :items="availableDatasets"
               item-title="name"
@@ -279,6 +309,7 @@
               class="mb-4"
             />
             <v-select
+              v-if="!isDataPreparation"
               v-model="newJob.hpcSite"
               :items="hpcSites"
               label="HPC Site"
@@ -359,13 +390,27 @@
               <span class="detail-label">Job Type</span>
               <span class="detail-value">{{ selectedJob.jobType }}</span>
             </div>
-            <div class="detail-item">
+            <div class="detail-item" v-if="selectedJob.jobType !== 'Data Preparation'">
               <span class="detail-label">Model</span>
               <span class="detail-value">{{ selectedJob.modelName }}</span>
             </div>
-            <div class="detail-item">
+            <div class="detail-item" v-if="selectedJob.jobType !== 'Data Preparation'">
               <span class="detail-label">Dataset</span>
               <span class="detail-value">{{ selectedJob.datasetName }}</span>
+            </div>
+            <div class="detail-item" v-if="selectedJob.jobType === 'Data Preparation'">
+              <span class="detail-label">Manifest</span>
+              <span class="detail-value">{{ selectedJob.manifestName || '—' }}</span>
+            </div>
+            <div class="detail-item" v-if="selectedJob.jobType === 'Data Preparation'">
+              <span class="detail-label">Execution Mode</span>
+              <v-chip 
+                :color="selectedJob.simulated ? 'warning' : 'success'" 
+                size="small" 
+                variant="tonal"
+              >
+                {{ selectedJob.simulated ? 'Simulated' : 'Production' }}
+              </v-chip>
             </div>
             <div class="detail-item">
               <span class="detail-label">HPC Site</span>
@@ -403,6 +448,22 @@
               <span class="detail-label">Error</span>
               <span class="detail-value error-text">{{ selectedJob.error }}</span>
             </div>
+          </div>
+
+          <!-- Execution Logs -->
+          <div class="logs-section" v-if="selectedJob.logs || selectedJob.status === 'running'">
+            <div class="d-flex align-center justify-space-between mb-2">
+              <h4>Execution Logs</h4>
+              <v-btn
+                size="small"
+                variant="text"
+                prepend-icon="mdi-content-copy"
+                @click="copyLogs(selectedJob.logs)"
+              >
+                Copy
+              </v-btn>
+            </div>
+            <pre class="logs-output">{{ selectedJob.logs }}</pre>
           </div>
 
           <!-- Running job progress -->
@@ -448,14 +509,148 @@
         </v-card-text>
       </v-card>
     </v-dialog>
+
+    <!-- Execute Job Dialog -->
+    <v-dialog v-model="showExecuteDialog" max-width="500">
+      <v-card class="execute-dialog glass">
+        <v-card-title class="d-flex align-center justify-space-between">
+          <div class="d-flex align-center">
+            <v-icon color="success" class="mr-2">mdi-play-circle</v-icon>
+            <span>Execute Data Preparation Job</span>
+          </div>
+          <v-btn
+            icon="mdi-close"
+            size="small"
+            variant="text"
+            @click="showExecuteDialog = false"
+          />
+        </v-card-title>
+
+        <v-card-text v-if="selectedJob">
+          <div class="mb-4">
+            <p class="text-subtitle-2 mb-2">Job: <span class="font-mono">{{ selectedJob.id }}</span></p>
+            <p class="text-subtitle-2">Manifest: <span class="font-weight-bold">{{ selectedJob.manifestName }}</span></p>
+          </div>
+
+          <v-select
+            v-model="executeMode"
+            label="Execution Mode"
+            :items="[
+              { 
+                title: 'Production Mode', 
+                value: false,
+                subtitle: 'Full pipeline execution with real data processing'
+              },
+              { 
+                title: 'Simulated Mode', 
+                value: true,
+                subtitle: 'Testing mode without actual data processing'
+              }
+            ]"
+            item-title="title"
+            item-value="value"
+            variant="outlined"
+            density="comfortable"
+            class="mb-2"
+          >
+            <template v-slot:item="{ props, item }">
+              <v-list-item v-bind="props">
+                <v-list-item-subtitle>{{ item.raw.subtitle }}</v-list-item-subtitle>
+              </v-list-item>
+            </template>
+          </v-select>
+
+          <v-alert
+            :color="executeMode ? 'warning' : 'success'"
+            variant="tonal"
+            density="compact"
+            class="mt-4"
+          >
+            <div class="text-caption">
+              <span v-if="executeMode">
+                <v-icon size="small">mdi-information</v-icon>
+                Simulated mode will run the pipeline without processing real data
+              </span>
+              <span v-else>
+                <v-icon size="small">mdi-alert</v-icon>
+                Production mode will execute the full pipeline with real data processing
+              </span>
+            </div>
+          </v-alert>
+        </v-card-text>
+
+        <v-card-actions>
+          <v-spacer />
+          <v-btn
+            variant="text"
+            @click="showExecuteDialog = false"
+          >
+            Cancel
+          </v-btn>
+          <v-btn
+            color="success"
+            variant="flat"
+            prepend-icon="mdi-play"
+            :loading="isSubmitting"
+            @click="executeJobWithMode"
+          >
+            Execute
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <!-- Execution Logs Dialog -->
+    <v-dialog v-model="showLogsDialog" max-width="900" scrollable>
+      <v-card class="logs-dialog glass">
+        <v-card-title class="d-flex align-center justify-space-between">
+          <div class="d-flex align-center">
+            <v-icon color="primary" class="mr-2">mdi-text-box-outline</v-icon>
+            <span>Execution Logs</span>
+          </div>
+          <div class="d-flex align-center gap-2">
+            <v-btn
+              size="small"
+              variant="text"
+              prepend-icon="mdi-content-copy"
+              @click="copyLogs(executionLogs)"
+            >
+              Copy
+            </v-btn>
+            <v-btn
+              icon="mdi-close"
+              size="small"
+              variant="text"
+              @click="showLogsDialog = false"
+            />
+          </div>
+        </v-card-title>
+
+        <v-card-text class="pa-0">
+          <pre class="logs-output-large">{{ executionLogs }}</pre>
+        </v-card-text>
+
+        <v-card-actions>
+          <v-spacer />
+          <v-btn
+            color="primary"
+            variant="flat"
+            @click="showLogsDialog = false"
+          >
+            Close
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </v-layout>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch, onBeforeUnmount } from 'vue'
 import { useProjectsStore } from '@/stores/projects'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import AppHeader from '@/components/layout/AppHeader.vue'
+import * as jobsService from '@/services/jobs'
 
 const projectsStore = useProjectsStore()
 
@@ -477,12 +672,24 @@ const newJob = ref({
   jobType: null,
   modelId: null,
   datasetId: null,
+  manifestId: null,
   hpcSite: null,
   nodes: 1,
   gpus: 4,
   memory: '64 GB',
   notes: ''
 })
+
+// Execute job dialog state
+const showExecuteDialog = ref(false)
+const executeJobId = ref(null)
+const executeMode = ref(false)  // false = Production, true = Simulated
+
+// Logs dialog state
+const showLogsDialog = ref(false)
+const executionLogs = ref('')
+const logsPollingTimer = ref(null)
+const activeLogJobId = ref(null)
 
 // Mock data
 const jobs = ref([
@@ -606,7 +813,9 @@ const tableHeaders = [
 
 const statusOptions = ['queued', 'running', 'completed', 'failed']
 const hpcSites = ['MUSICA', 'MUG-SX']
-const jobTypes = ['Training', 'Inference', 'Evaluation', 'Generation']
+const jobTypes = ['Training', 'Inference', 'Evaluation', 'Generation', 'Data Preparation']
+
+const isDataPreparation = computed(() => newJob.value.jobType === 'Data Preparation')
 
 const availableModels = computed(() => [
   { id: 'model-001', name: 'ResNet-WSI-v2' },
@@ -622,6 +831,32 @@ const availableDatasets = computed(() => [
   { id: 'ds-003', name: 'Training Set Alpha' },
   { id: 'ds-004', name: 'Validation Set Beta' },
 ])
+
+const availableManifests = computed(() => [])
+
+const fetchedManifests = ref([])
+
+async function loadManifests(projectId) {
+  if (!projectId) {
+    fetchedManifests.value = []
+    return
+  }
+  
+  try {
+    const response = await jobsService.getManifests(projectId)
+    fetchedManifests.value = response.manifests || []
+  } catch (err) {
+    console.error('Failed to load manifests:', err)
+    fetchedManifests.value = []
+  }
+}
+
+// Watch for project change and load manifests
+watch(() => newJob.value.projectId, (newProjectId) => {
+  if (newProjectId) {
+    loadManifests(newProjectId)
+  }
+})
 
 // Base jobs filtered by selected project
 const projectFilteredJobs = computed(() => {
@@ -713,7 +948,8 @@ function getJobTypeIcon(jobType) {
     Training: 'mdi-school',
     Inference: 'mdi-brain',
     Evaluation: 'mdi-chart-box',
-    Generation: 'mdi-creation'
+    Generation: 'mdi-creation',
+    'Data Preparation': 'mdi-file-cog-outline'
   }
   return icons[jobType] || 'mdi-cog'
 }
@@ -736,6 +972,9 @@ async function refreshJobs() {
 function viewJob(job) {
   selectedJob.value = job
   showDetailsDialog.value = true
+  if (job?.status === 'running') {
+    startLogsPolling(job.id)
+  }
 }
 
 function stopJob(job) {
@@ -750,11 +989,24 @@ function cancelJob(job) {
   }
 }
 
-function retryJob(job) {
-  job.status = 'queued'
-  job.error = null
-  job.startedAt = null
-  job.runtime = null
+async function retryJob(job) {
+  try {
+    await jobsService.retryJob(job.id)
+    await loadJobs()
+  } catch (err) {
+    console.error('Retry job failed:', err)
+    alert(`Failed to retry job: ${err.message}`)
+  }
+}
+
+async function rerunJob(job) {
+  try {
+    await jobsService.rerunJob(job.id)
+    await loadJobs()
+  } catch (err) {
+    console.error('Rerun job failed:', err)
+    alert(`Failed to rerun job: ${err.message}`)
+  }
 }
 
 function downloadResults(job) {
@@ -766,43 +1018,106 @@ async function submitJob() {
   if (!valid) return
 
   isSubmitting.value = true
-  await new Promise(resolve => setTimeout(resolve, 1000))
 
-  const project = projectsStore.getProjectById(newJob.value.projectId)
-  const model = availableModels.value.find(m => m.id === newJob.value.modelId)
-  const dataset = availableDatasets.value.find(d => d.id === newJob.value.datasetId)
+  try {
+    const project = projectsStore.getProjectById(newJob.value.projectId)
+    
+    // Call backend API to submit job
+    const response = await jobsService.submitJob({
+      projectId: newJob.value.projectId,
+      jobType: newJob.value.jobType,
+      modelId: newJob.value.modelId || null,
+      datasetId: newJob.value.datasetId || null,
+      manifestId: newJob.value.manifestId || null,
+      hpcSite: newJob.value.hpcSite,
+      nodes: newJob.value.nodes,
+      gpus: newJob.value.gpus,
+      memory: newJob.value.memory,
+      notes: newJob.value.notes
+    })
 
-  jobs.value.unshift({
-    id: `job-${Math.random().toString(36).substr(2, 9)}`,
-    projectId: newJob.value.projectId,
-    projectName: project?.shortTitle || 'Unknown',
-    useCase: project?.useCase || 'UC7',
-    jobType: newJob.value.jobType,
-    modelName: model?.name || 'Unknown Model',
-    datasetName: dataset?.name || 'Unknown Dataset',
-    hpcSite: newJob.value.hpcSite,
-    nodes: newJob.value.nodes,
-    gpus: newJob.value.gpus,
-    memory: newJob.value.memory,
-    status: 'queued',
-    submittedAt: new Date().toISOString(),
-    startedAt: null,
-    completedAt: null,
-    runtime: null
-  })
+    const backendJob = response.job
+    const isPrepJob = newJob.value.jobType === 'Data Preparation'
+    const model = availableModels.value.find(m => m.id === newJob.value.modelId)
+    const dataset = availableDatasets.value.find(d => d.id === newJob.value.datasetId)
+    const manifest = fetchedManifests.value.find(m => m.id === newJob.value.manifestId)
 
-  isSubmitting.value = false
-  showNewJobDialog.value = false
-  newJob.value = {
-    projectId: null,
-    jobType: null,
-    modelId: null,
-    datasetId: null,
-    hpcSite: null,
-    nodes: 1,
-    gpus: 4,
-    memory: '64 GB',
-    notes: ''
+    // Convert backend job format to frontend display format
+    jobs.value.unshift({
+      id: backendJob.id,
+      projectId: backendJob.projectId,
+      projectName: project?.shortTitle || 'Unknown',
+      useCase: project?.useCase || 'UC7',
+      jobType: backendJob.jobType,
+      modelName: isPrepJob ? '—' : (model?.name || 'Unknown Model'),
+      datasetName: isPrepJob ? '—' : (dataset?.name || 'Unknown Dataset'),
+      manifestName: isPrepJob ? (manifest?.name || 'Unknown Manifest') : null,
+      hpcSite: backendJob.hpcSite,
+      nodes: backendJob.nodes,
+      gpus: backendJob.gpus,
+      memory: backendJob.memory,
+      status: backendJob.status,
+      submittedAt: backendJob.submittedAt,
+      startedAt: backendJob.startedAt,
+      completedAt: backendJob.completedAt,
+      runtime: backendJob.runtime,
+      error: backendJob.error
+    })
+
+    showNewJobDialog.value = false
+    
+    // Reset form
+    newJob.value = {
+      projectId: null,
+      jobType: null,
+      modelId: null,
+      datasetId: null,
+      manifestId: null,
+      hpcSite: null,
+      nodes: 1,
+      gpus: 4,
+      memory: '64 GB',
+      notes: ''
+    }
+  } catch (err) {
+    console.error('Job submission failed:', err)
+    alert(`Failed to submit job: ${err.message}`)
+  } finally {
+    isSubmitting.value = false
+  }
+}
+
+async function loadJobs() {
+  isLoading.value = true
+  try {
+    const response = await jobsService.getJobs(projectsStore.selectedProjectId)
+    // Map backend jobs to frontend format
+    jobs.value = (response.jobs || []).map(job => ({
+      id: job.id,
+      projectId: job.projectId,
+      projectName: job.projectName || 'Unknown',
+      useCase: job.useCase || 'UC7',
+      jobType: job.jobType,
+      modelName: job.modelId || job.modelName || '—',
+      datasetName: job.datasetId || job.datasetName || '—',
+      manifestName: job.manifestName || null,
+      hpcSite: job.hpcSite,
+      nodes: job.nodes,
+      gpus: job.gpus,
+      memory: job.memory,
+      status: job.status,
+      submittedAt: job.submittedAt,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
+      runtime: job.runtime,
+      error: job.error,
+      simulated: job.simulated || false,
+      logs: job.logs || null
+    }))
+  } catch (err) {
+    console.error('Failed to load jobs:', err)
+  } finally {
+    isLoading.value = false
   }
 }
 
@@ -810,6 +1125,90 @@ onMounted(async () => {
   if (projectsStore.projects.length === 0) {
     await projectsStore.fetchProjects()
   }
+  await loadJobs()
+})
+
+// Execute job with mode selection
+function openExecuteDialog(job) {
+  executeJobId.value = job.id
+  selectedJob.value = job
+  executeMode.value = false  // Default to Production mode
+  showExecuteDialog.value = true
+}
+
+async function executeJobWithMode() {
+  try {
+    isSubmitting.value = true
+    await jobsService.executeJob(executeJobId.value, executeMode.value)
+    showExecuteDialog.value = false
+    
+    // Show logs dialog and start live polling
+    executionLogs.value = ''
+    showLogsDialog.value = true
+    startLogsPolling(executeJobId.value)
+    
+    executeJobId.value = null
+    selectedJob.value = null
+    await loadJobs()  // Reload to show updated status
+  } catch (err) {
+    console.error('Failed to execute job:', err)
+    executionLogs.value = `Error executing job:\n${err.message}`
+    showLogsDialog.value = true
+  } finally {
+    isSubmitting.value = false
+  }
+}
+
+async function fetchJobLogs(jobId) {
+  try {
+    const response = await jobsService.getJobLogs(jobId)
+    executionLogs.value = response.logs || ''
+
+    if (selectedJob.value?.id === jobId) {
+      selectedJob.value.logs = executionLogs.value
+    }
+
+    if (response.jobStatus && response.jobStatus !== 'running' && response.jobStatus !== 'queued') {
+      stopLogsPolling()
+      await loadJobs()
+    }
+  } catch (err) {
+    console.error('Failed to fetch job logs:', err)
+  }
+}
+
+function startLogsPolling(jobId) {
+  if (!jobId) return
+  stopLogsPolling()
+  activeLogJobId.value = jobId
+  fetchJobLogs(jobId)
+  logsPollingTimer.value = setInterval(() => fetchJobLogs(jobId), 2000)
+}
+
+function stopLogsPolling() {
+  if (logsPollingTimer.value) {
+    clearInterval(logsPollingTimer.value)
+    logsPollingTimer.value = null
+  }
+  activeLogJobId.value = null
+}
+
+function copyLogs(logs) {
+  navigator.clipboard.writeText(logs).then(() => {
+    console.log('Logs copied to clipboard')
+  }).catch(err => {
+    console.error('Failed to copy logs:', err)
+  })
+}
+
+watch([showLogsDialog, showDetailsDialog], ([logsOpen, detailsOpen]) => {
+  if (!logsOpen && !detailsOpen) {
+    stopLogsPolling()
+  }
+})
+
+onBeforeUnmount(() => {
+  stopLogsPolling()
 })
 </script>
 
@@ -1091,6 +1490,51 @@ onMounted(async () => {
   font-size: 1rem;
   font-weight: 600;
   color: #10b981;
+}
+
+// Logs section
+.logs-section {
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid rgba(51, 65, 85, 0.5);
+  
+  h4 {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+}
+
+.logs-output {
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(51, 65, 85, 0.5);
+  border-radius: 8px;
+  padding: 1rem;
+  font-family: 'Courier New', monospace;
+  font-size: 0.75rem;
+  color: #e2e8f0;
+  overflow-x: auto;
+  max-height: 300px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.logs-output-large {
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(51, 65, 85, 0.5);
+  padding: 1.5rem;
+  font-family: 'Courier New', monospace;
+  font-size: 0.8125rem;
+  color: #e2e8f0;
+  overflow-x: auto;
+  max-height: 600px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
 }
 
 // Responsive

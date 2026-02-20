@@ -162,3 +162,75 @@ export async function updatePipeline(projectId, pipelineId, manifest) {
     throw err
   }
 }
+
+/**
+ * Retrieve source columns for a manifest
+ * @param {object} manifest - The pipeline manifest object
+ * @param {string} sourceName - Optional source name to fetch columns for
+ * @returns {Promise<object>} Response with sources map
+ */
+export async function getSourceColumns(manifest, sourceName = null) {
+  if (!manifest || typeof manifest !== 'object') {
+    throw new Error('Manifest must be a valid object')
+  }
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/pipeline/source-columns`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        manifest,
+        source_name: sourceName
+      })
+    })
+
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || `Failed to retrieve source columns: ${response.statusText}`)
+    }
+
+    return await response.json()
+  } catch (err) {
+    console.error('Source columns error:', err)
+    throw err
+  }
+}
+
+/**
+ * Delete a saved pipeline
+ * @param {string} projectId - The project ID
+ * @param {string} pipelineId - The pipeline file ID
+ * @returns {Promise<object>} Response with deletion confirmation
+ */
+export async function deletePipeline(projectId, pipelineId) {
+  if (!projectId) {
+    throw new Error('Project ID is required')
+  }
+  if (!pipelineId) {
+    throw new Error('Pipeline ID is required')
+  }
+
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/pipeline/${encodeURIComponent(projectId)}/${encodeURIComponent(pipelineId)}`,
+      {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      }
+    )
+
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || `Failed to delete pipeline: ${response.statusText}`)
+    }
+
+    return await response.json()
+  } catch (err) {
+    console.error('Pipeline delete error:', err)
+    throw err
+  }
+}

@@ -81,6 +81,24 @@ const routes = [
   },
   {
     path: '/pipelines',
+    name: 'dps-pipelines',
+    component: () => import('@/views/DPSPipelinesView.vue'),
+    meta: { 
+      requiresAuth: true,
+      title: 'DPS Pipelines'
+    }
+  },
+  {
+    path: '/pipelines/new',
+    name: 'pipeline-builder-new',
+    component: () => import('@/views/PipelineBuilderView.vue'),
+    meta: { 
+      requiresAuth: true,
+      title: 'New Pipeline'
+    }
+  },
+  {
+    path: '/pipelines/builder',
     name: 'pipeline-builder',
     component: () => import('@/views/PipelineBuilderView.vue'),
     meta: { 
