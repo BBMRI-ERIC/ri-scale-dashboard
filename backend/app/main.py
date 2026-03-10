@@ -428,7 +428,7 @@ async def submit_job(payload: dict = Body(...)) -> JSONResponse:
         manifest_id = payload.get("manifestId")
         model_id = payload.get("modelId")
         dataset_id = payload.get("datasetId")
-        hpc_site = payload.get("hpcSite")
+        hpc_site = payload.get("hpcSite", None)
         nodes = payload.get("nodes")
         gpus = payload.get("gpus")
         memory = payload.get("memory")
@@ -440,7 +440,7 @@ async def submit_job(payload: dict = Body(...)) -> JSONResponse:
             raise HTTPException(status_code=400, detail="projectId is required")
         if not job_type:
             raise HTTPException(status_code=400, detail="jobType is required")
-        if not hpc_site:
+        if not hpc_site and job_type != "Data Preparation":
             raise HTTPException(status_code=400, detail="hpcSite is required")
         if nodes is None:
             raise HTTPException(status_code=400, detail="nodes is required")

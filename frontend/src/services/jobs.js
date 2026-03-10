@@ -17,7 +17,7 @@ export async function submitJob(jobPayload) {
   if (!jobPayload.jobType) {
     throw new Error('Job type is required')
   }
-  if (!jobPayload.hpcSite) {
+  if (!jobPayload.hpcSite && jobPayload.jobType !== 'Data Preparation') {
     throw new Error('HPC site is required')
   }
 
