@@ -197,69 +197,129 @@
             <v-card class="glass" :elevation="0">
               <v-card-title class="text-subtitle-1">Pipeline Canvas</v-card-title>
               <v-divider />
-              <div class="canvas">
+              <div class="canvas" ref="canvasEl">
                 <div v-if="stages.length === 0" class="empty-state">
                   <v-icon size="64" color="primary" class="mb-3">mdi-flow-chart</v-icon>
                   <h3>No stages yet</h3>
                   <p>Add stages from the library to start building your pipeline</p>
                 </div>
-                <v-timeline 
+                <div
                   v-else
-                  dense 
-                  align="start"
-                  class="pipeline-timeline"
+                  class="pipeline-graph"
+                  ref="graphContainer"
+                  @mousemove="onCanvasMouseMove"
+                  @mouseup="onCanvasMouseUp"
+                  @mouseleave="onCanvasMouseUp"
                 >
-                  <v-timeline-item
+                  <!-- SVG overlay for connection lines + wiring preview -->
+                  <svg class="connection-svg" ref="connectionSvg">
+                    <defs>
+                      <linearGradient
+                        v-for="edge in svgEdges"
+                        :key="'g-' + edge.key"
+                        :id="'grad-' + edge.key"
+                        :x1="edge.x1" :y1="edge.y1"
+                        :x2="edge.x2" :y2="edge.y2"
+                        gradientUnits="userSpaceOnUse"
+                      >
+                        <stop offset="0%" stop-color="#63b377" />
+                        <stop offset="100%" stop-color="#E69830" />
+                      </linearGradient>
+                    </defs>
+                    <path
+                      v-for="edge in svgEdges"
+                      :key="edge.key"
+                      :d="edge.d"
+                      fill="none"
+                      :stroke="`url(#grad-${edge.key})`"
+                      stroke-width="2"
+                      stroke-opacity="0.6"
+                      stroke-linejoin="round"
+                      stroke-linecap="round"
+                    />
+                    <!-- Wiring preview line -->
+                    <path
+                      v-if="wiringPreview"
+                      :d="wiringPreview"
+                      fill="none"
+                      stroke="#E69830"
+                      stroke-width="2"
+                      stroke-opacity="0.4"
+                      stroke-dasharray="6 4"
+                      stroke-linejoin="round"
+                      stroke-linecap="round"
+                    />
+                  </svg>
+
+                  <!-- Stage nodes (absolute positioned) -->
+                  <div
                     v-for="(stage, idx) in stages"
                     :key="stage.id"
-                    dot-color="primary"
-                    fill-dot
-                    size="small"
+                    :ref="el => setStageRef(stage.id, el)"
+                    class="stage-node"
+                    :style="{ left: (stage.position?.x ?? 0) + 'px', top: (stage.position?.y ?? 0) + 'px' }"
                   >
-                    <div 
+                    <!-- Input source ports (always shown) -->
+                    <div class="stage-ports stage-ports-in" v-if="getStageInputPorts(stage).length">
+                      <div
+                        v-for="port in getStageInputPorts(stage)"
+                        :key="port.paramKey"
+                        :ref="el => setPortRef(stage.id, 'in', port.paramKey, el)"
+                        class="port port-in"
+                        :class="{ 'port-wiring-target': isWiringCompatibleTarget(stage.id, port.paramKey), 'port-empty': !port.value, 'port-error': port.value && isUnresolvedInput(stage.id, port.paramKey) }"
+                        @mousedown.stop="onPortMouseDown($event, stage.id, 'in', port.paramKey)"
+                        @mouseup.stop="onPortMouseUp($event, stage.id, 'in', port.paramKey)"
+                      >
+                        <v-icon size="10" class="mr-1">mdi-arrow-down</v-icon>
+                        {{ port.value || port.label }}
+                      </div>
+                    </div>
+
+                    <!-- Card body -->
+                    <div
                       class="stage-card"
                       :class="{ 'selected': selectedStageId === stage.id }"
+                      @mousedown.stop="onCardMouseDown($event, stage)"
                       @click="selectStage(stage.id)"
                     >
                       <div class="stage-header">
                         <div class="stage-title">
+                          <span class="stage-order-badge">{{ stageExecutionOrder[stage.id] }}</span>
                           <v-icon size="18" class="mr-2">{{ getStageIcon(stage) }}</v-icon>
                           {{ stage.config?.name || stage.name }}
                         </div>
                         <div class="stage-actions">
-                          <v-btn 
-                            icon 
-                            size="small" 
-                            variant="text" 
-                            @click.stop="moveStage(idx, -1)" 
-                            :disabled="idx === 0"
-                          >
-                            <v-icon>mdi-arrow-up</v-icon>
-                          </v-btn>
-                          <v-btn 
-                            icon 
-                            size="small" 
-                            variant="text" 
-                            @click.stop="moveStage(idx, 1)" 
-                            :disabled="idx === stages.length - 1"
-                          >
-                            <v-icon>mdi-arrow-down</v-icon>
-                          </v-btn>
-                          <v-btn 
-                            icon 
-                            size="small" 
-                            variant="text" 
-                            color="error" 
+                          <v-btn
+                            icon
+                            size="small"
+                            variant="text"
+                            color="error"
                             @click.stop="removeStage(stage.id)"
                           >
                             <v-icon>mdi-close</v-icon>
                           </v-btn>
                         </div>
                       </div>
-                      <p class="stage-note">Click to configure this stage</p>
+                      <p class="stage-note">Drag to move · Click to configure</p>
                     </div>
-                  </v-timeline-item>
-                </v-timeline>
+
+                    <!-- Output source ports (always shown) -->
+                    <div class="stage-ports stage-ports-out" v-if="getStageOutputPorts(stage).length">
+                      <div
+                        v-for="port in getStageOutputPorts(stage)"
+                        :key="port.paramKey"
+                        :ref="el => setPortRef(stage.id, 'out', port.paramKey, el)"
+                        class="port port-out"
+                        :class="{ 'port-empty': !port.value }"
+                        @mousedown.stop="onPortMouseDown($event, stage.id, 'out', port.paramKey)"
+                        @mouseup.stop="onPortMouseUp($event, stage.id, 'out', port.paramKey)"
+                      >
+                        {{ port.value || port.label }}
+                        <v-icon size="10" class="ml-1">mdi-arrow-down</v-icon>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </v-card>
           </v-col>
@@ -791,6 +851,360 @@ function scheduleSourceColumnsRefresh() {
   }, 400)
 }
 
+// Graph connection rendering
+const graphContainer = ref(null)
+const canvasEl = ref(null)
+const connectionSvg = ref(null)
+const stageRefMap = ref({})
+const portRefMap = ref({})
+const svgEdges = ref([])
+
+function setStageRef(id, el) {
+  if (el) stageRefMap.value[id] = el
+  else delete stageRefMap.value[id]
+}
+
+function setPortRef(stageId, direction, sourceName, el) {
+  const key = `${stageId}_${direction}_${sourceName}`
+  if (el) portRefMap.value[key] = el
+  else delete portRefMap.value[key]
+}
+
+// ─── Grid snapping ────────────────────────────────────────────────────────────
+const GRID_SIZE = 40 // px per grid cell
+function snapToGrid(val) {
+  return Math.round(val / GRID_SIZE) * GRID_SIZE
+}
+
+// ─── Node dragging ────────────────────────────────────────────────────────────
+const dragging = ref(null) // { stageId, startX, startY, origX, origY }
+
+function onCardMouseDown(event, stage) {
+  if (event.button !== 0) return
+  if (!stage.position) stage.position = { x: 0, y: 0 }
+  dragging.value = {
+    stageId: stage.id,
+    startX: event.clientX,
+    startY: event.clientY,
+    origX: stage.position.x,
+    origY: stage.position.y,
+  }
+}
+
+function onCanvasMouseMove(event) {
+  // Handle node dragging
+  if (dragging.value) {
+    const stage = stages.value.find(s => s.id === dragging.value.stageId)
+    if (!stage) return
+    const dx = event.clientX - dragging.value.startX
+    const dy = event.clientY - dragging.value.startY
+    stage.position.x = snapToGrid(dragging.value.origX + dx)
+    stage.position.y = snapToGrid(dragging.value.origY + dy)
+    updateConnections()
+  }
+
+  // Handle wiring preview
+  if (wiringFrom.value) {
+    const container = graphContainer.value
+    if (!container) return
+    const rect = container.getBoundingClientRect()
+    wiringMouseX.value = event.clientX - rect.left
+    wiringMouseY.value = event.clientY - rect.top
+  }
+}
+
+function onCanvasMouseUp() {
+  if (dragging.value) {
+    dragging.value = null
+    updateConnections()
+  }
+  cancelWiring()
+}
+
+// ─── Port wiring (connect by dragging) ────────────────────────────────────────
+const wiringFrom = ref(null) // { stageId, direction, sourceName }
+const wiringMouseX = ref(0)
+const wiringMouseY = ref(0)
+
+function onPortMouseDown(event, stageId, direction, paramKey) {
+  if (event.button !== 0) return
+  event.preventDefault()
+  wiringFrom.value = { stageId, direction, paramKey }
+  const container = graphContainer.value
+  if (container) {
+    const rect = container.getBoundingClientRect()
+    wiringMouseX.value = event.clientX - rect.left
+    wiringMouseY.value = event.clientY - rect.top
+  }
+}
+
+function onPortMouseUp(event, stageId, direction, paramKey) {
+  if (!wiringFrom.value) return
+  completeWiring(stageId, direction, paramKey)
+}
+
+function completeWiring(toStageId, toDirection, toParamKey) {
+  const from = wiringFrom.value
+  if (!from) return
+
+  // Must connect output→input or input→output (not same direction)
+  if (from.direction === toDirection) { cancelWiring(); return }
+  // Can't wire to self
+  if (from.stageId === toStageId) { cancelWiring(); return }
+
+  // Determine which side is the producer (out) and which is the consumer (in)
+  const outStageId = from.direction === 'out' ? from.stageId : toStageId
+  const outParamKey = from.direction === 'out' ? from.paramKey : toParamKey
+  const inStageId = from.direction === 'in' ? from.stageId : toStageId
+  const inParamKey = from.direction === 'in' ? from.paramKey : toParamKey
+
+  const producerStage = stages.value.find(s => s.id === outStageId)
+  const consumerStage = stages.value.find(s => s.id === inStageId)
+  if (!producerStage || !consumerStage) { cancelWiring(); return }
+
+  // Read the producer's output source value
+  const outPort = getStageOutputPorts(producerStage).find(p => p.paramKey === outParamKey)
+  const sourceValue = outPort?.value
+  if (!sourceValue) { cancelWiring(); return }
+
+  // Set only the targeted input param on the consumer
+  setStagePortValue(consumerStage, inParamKey, sourceValue)
+  cancelWiring()
+}
+
+// Set a single port's config value by paramKey
+function setStagePortValue(stage, paramKey, value) {
+  if (isChainStage(stage)) {
+    stage.config.userInputs[paramKey] = value
+  } else {
+    stage.config[paramKey] = value
+  }
+}
+
+function cancelWiring() {
+  wiringFrom.value = null
+}
+
+function isWiringCompatibleTarget(stageId, paramKey) {
+  if (!wiringFrom.value) return false
+  if (wiringFrom.value.stageId === stageId) return false
+  return wiringFrom.value.direction !== 'in' // highlight inputs when dragging from output
+}
+
+// Computed wiring preview path
+const wiringPreview = computed(() => {
+  if (!wiringFrom.value || !graphContainer.value) return null
+  const from = wiringFrom.value
+  const portKey = `${from.stageId}_${from.direction}_${from.paramKey}`
+  const portEl = portRefMap.value[portKey]
+  if (!portEl) return null
+
+  const container = graphContainer.value
+  const containerRect = container.getBoundingClientRect()
+  const portRect = portEl.getBoundingClientRect()
+
+  const px = portRect.left + portRect.width / 2 - containerRect.left
+  const py = from.direction === 'out'
+    ? portRect.bottom - containerRect.top
+    : portRect.top - containerRect.top
+
+  const mx = wiringMouseX.value
+  const my = wiringMouseY.value
+  const midY = (py + my) / 2
+  return `M ${px} ${py} L ${px} ${midY} L ${mx} ${midY} L ${mx} ${my}`
+})
+
+// Extract output port descriptors from a stage.
+// Always returns one entry per register_id param, even when empty.
+// Each entry: { paramKey, label, value }
+function getStageOutputPorts(stage) {
+  if (isChainStage(stage)) {
+    const chainDef = getChainDefinition(stage.config?.chainKey)
+    if (!chainDef) return []
+    const ports = []
+    ;(chainDef.step_param_exposure || []).forEach(exp => {
+      if (exp.register_id === 'sources') {
+        const stepId = exp.step_id
+        const param = exp.param || exp.param_name || ''
+        const expKey = `${stepId}.${param.replace(/\./g, '_')}`
+        const value = stage.config.userInputs?.[expKey] || ''
+        ports.push({ paramKey: expKey, label: exp.label || param, value })
+      }
+    })
+    return ports
+  }
+
+  const typeConfig = getStepTypeConfig(stage.type)
+  if (!typeConfig?.params) return []
+  const ports = []
+  Object.entries(typeConfig.params).forEach(([paramKey, paramConfig]) => {
+    if (paramConfig.register_id === 'sources') {
+      const value = stage.config?.[paramKey] || ''
+      ports.push({ paramKey, label: paramConfig.label || paramKey, value })
+    }
+  })
+  return ports
+}
+
+// Extract input port descriptors from a stage.
+// Always returns one entry per use_registry_source param, even when empty.
+// Each entry: { paramKey, label, value }
+function getStageInputPorts(stage) {
+  if (isChainStage(stage)) {
+    const chainDef = getChainDefinition(stage.config?.chainKey)
+    if (!chainDef) return []
+    const ports = []
+    ;(chainDef.step_param_exposure || []).forEach(exp => {
+      if (exp.use_registry_source === 'sources') {
+        const stepId = exp.step_id
+        const param = exp.param || exp.param_name || ''
+        const expKey = `${stepId}.${param.replace(/\./g, '_')}`
+        const value = stage.config.userInputs?.[expKey] || ''
+        ports.push({ paramKey: expKey, label: exp.label || param, value })
+      }
+    })
+    return ports
+  }
+
+  const typeConfig = getStepTypeConfig(stage.type)
+  if (!typeConfig?.params) return []
+  const ports = []
+  Object.entries(typeConfig.params).forEach(([paramKey, paramConfig]) => {
+    if (paramConfig.use_registry_source === 'sources') {
+      const value = stage.config?.[paramKey] || ''
+      ports.push({ paramKey, label: paramConfig.label || paramKey, value })
+    }
+  })
+  return ports
+}
+
+// Compute logical edges between stages based on source names.
+// Each consumer input port connects to the producer whose output value matches.
+// Uses paramKey so each port is individually addressable.
+const stageEdges = computed(() => {
+  const edges = []
+  // Iterate stages in position-sorted order (matching execution order).
+  // For each stage, resolve inputs against producers registered so far,
+  // then register its outputs. This way, if a step uses the same source
+  // name for input and output, the input connects to the previous producer
+  // and the output overrides it for subsequent consumers.
+  const sorted = [...stages.value].sort((a, b) => {
+    const ay = a.position?.y ?? 0
+    const by = b.position?.y ?? 0
+    if (ay !== by) return ay - by
+    return (a.position?.x ?? 0) - (b.position?.x ?? 0)
+  })
+  const currentProducer = {}
+  sorted.forEach(stage => {
+    // Resolve this stage's inputs against producers registered so far
+    getStageInputPorts(stage).forEach(port => {
+      if (port.value && currentProducer[port.value]) {
+        const producer = currentProducer[port.value]
+        // Skip self-connections
+        if (producer.stageId !== stage.id) {
+          edges.push({
+            from: producer.stageId,
+            fromParamKey: producer.paramKey,
+            to: stage.id,
+            toParamKey: port.paramKey,
+            sourceName: port.value,
+          })
+        }
+      }
+    })
+    // Register (or override) this stage's outputs for subsequent consumers
+    getStageOutputPorts(stage).forEach(port => {
+      if (port.value) {
+        currentProducer[port.value] = { stageId: stage.id, paramKey: port.paramKey }
+      }
+    })
+  })
+  return edges
+})
+
+// Set of "stageId_paramKey" strings for input ports whose source name
+// is not produced by any earlier stage (in execution order).
+const unresolvedInputPorts = computed(() => {
+  const unresolved = new Set()
+  const sorted = [...stages.value].sort((a, b) => {
+    const ay = a.position?.y ?? 0
+    const by = b.position?.y ?? 0
+    if (ay !== by) return ay - by
+    return (a.position?.x ?? 0) - (b.position?.x ?? 0)
+  })
+  const availableSources = {}
+  sorted.forEach(stage => {
+    getStageInputPorts(stage).forEach(port => {
+      if (port.value && !availableSources[port.value]) {
+        unresolved.add(`${stage.id}_${port.paramKey}`)
+      }
+    })
+    getStageOutputPorts(stage).forEach(port => {
+      if (port.value) {
+        availableSources[port.value] = true
+      }
+    })
+  })
+  return unresolved
+})
+
+function isUnresolvedInput(stageId, paramKey) {
+  return unresolvedInputPorts.value.has(`${stageId}_${paramKey}`)
+}
+
+// Recompute SVG connection paths from actual DOM positions.
+// With free-layout canvas, all edges use simple orthogonal routes from port to port.
+function updateConnections() {
+  const container = graphContainer.value
+  if (!container) { svgEdges.value = []; return }
+
+  const containerRect = container.getBoundingClientRect()
+  const edges = []
+
+  stageEdges.value.forEach(edge => {
+    const fromKey = `${edge.from}_out_${edge.fromParamKey}`
+    const toKey = `${edge.to}_in_${edge.toParamKey}`
+    const fromEl = portRefMap.value[fromKey]
+    const toEl = portRefMap.value[toKey]
+    if (!fromEl || !toEl) return
+
+    const fromRect = fromEl.getBoundingClientRect()
+    const toRect = toEl.getBoundingClientRect()
+
+    // Output port: exit from bottom center
+    const x1 = fromRect.left + fromRect.width / 2 - containerRect.left
+    const y1 = fromRect.bottom - containerRect.top
+    // Input port: enter at top center
+    const x2 = toRect.left + toRect.width / 2 - containerRect.left
+    const y2 = toRect.top - containerRect.top
+
+    // Simple orthogonal path with a horizontal jog at the midpoint
+    const midY = (y1 + y2) / 2
+    const d = `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`
+
+    edges.push({
+      key: `${edge.from}_${edge.fromParamKey}_${edge.to}_${edge.toParamKey}`,
+      d,
+      x1, y1, x2, y2,
+    })
+  })
+
+  svgEdges.value = edges
+}
+
+// Execution order based on graphical position (top-to-bottom, left-to-right)
+const stageExecutionOrder = computed(() => {
+  const sorted = [...stages.value].sort((a, b) => {
+    const ay = a.position?.y ?? 0
+    const by = b.position?.y ?? 0
+    if (ay !== by) return ay - by
+    return (a.position?.x ?? 0) - (b.position?.x ?? 0)
+  })
+  const orderMap = {}
+  sorted.forEach((s, i) => { orderMap[s.id] = i + 1 })
+  return orderMap
+})
+
 // Selected stage for configuration
 const selectedStageId = ref(null)
 const selectedStage = computed(() => {
@@ -891,6 +1305,17 @@ function getStageIcon(stageOrName) {
   return matchByName ? matchByName.icon : 'mdi-cube-outline'
 }
 
+// Calculate position for next added stage — place on grid, stagger below existing ones
+function getNextStagePosition() {
+  const COL = 0          // first column
+  const ROW_HEIGHT = 5   // grid cells between rows
+  const existingCount = stages.value.length
+  return {
+    x: snapToGrid(GRID_SIZE + COL * 8 * GRID_SIZE),
+    y: snapToGrid(GRID_SIZE + existingCount * ROW_HEIGHT * GRID_SIZE),
+  }
+}
+
 // Add a new stage to the pipeline
 function addStage(stageDefinition) {
   const definition = (stageDefinition && typeof stageDefinition === 'object')
@@ -938,6 +1363,7 @@ function createChainStage(definition) {
     id,
     name: stageName,
     type: 'command_chain',
+    position: getNextStagePosition(),
     config: {
       name: stageName,
       enabled: true,
@@ -964,6 +1390,7 @@ function createStage(stepType, stageName, paramOverrides = {}) {
     id,
     name: stageName,
     type: stepType,
+    position: getNextStagePosition(),
     config,
   })
   selectedStageId.value = id
@@ -1361,7 +1788,16 @@ async function performSavePipeline(isOverwrite = false) {
 function buildManifestFromStages() {
   const jobSteps = []
 
-  stages.value.forEach((s) => {
+  // Sort stages by graphical position (top-to-bottom, then left-to-right)
+  // so the YAML step order reflects the visual layout, not the insertion order.
+  const sortedStages = [...stages.value].sort((a, b) => {
+    const ay = a.position?.y ?? 0
+    const by = b.position?.y ?? 0
+    if (ay !== by) return ay - by
+    return (a.position?.x ?? 0) - (b.position?.x ?? 0)
+  })
+
+  sortedStages.forEach((s) => {
     if (isChainStage(s)) {
       const chainDef = getChainDefinition(s.config.chainKey)
       if (!chainDef) return
@@ -1410,14 +1846,19 @@ function buildManifestFromStages() {
           if (paramPath) setNested(paramsObj, paramPath, value)
         })
 
-        jobSteps.push({
+        const stepObj = {
           step_name: displayName,
           type: stepType,
           command_chain_type: s.config.command_chain_type || s.config.chainKey,
           chain_command_name: s.config.chain_command_name || s.config.name,
           enabled: s.config.enabled !== false,
           params: paramsObj,
-        })
+        }
+        // Store grid position on the first step of the chain
+        if (idx === 0 && s.position) {
+          stepObj._ui_position = { x: s.position.x, y: s.position.y }
+        }
+        jobSteps.push(stepObj)
       })
 
       return
@@ -1425,14 +1866,18 @@ function buildManifestFromStages() {
 
     const displayName = (s.config && s.config.name) || s.name || 'Unnamed step'
     const { enabled, name, ...params } = (s.config || {})
-    jobSteps.push({
+    const stepObj = {
       step_name: displayName,
       type: s.type,
       command_chain_type: s.config?.command_chain_type,
       chain_command_name: s.config?.chain_command_name,
       enabled: enabled !== false,
       params: params,
-    })
+    }
+    if (s.position) {
+      stepObj._ui_position = { x: s.position.x, y: s.position.y }
+    }
+    jobSteps.push(stepObj)
   })
 
   return {
@@ -1482,7 +1927,7 @@ function applyYamlToStages({ preserveSelection = false } = {}) {
           if (currentGroup) {
             groupedSteps.push(currentGroup)
           }
-          currentGroup = { chainType, chainName, steps: [step] }
+          currentGroup = { chainType, chainName, steps: [step], _ui_position: step._ui_position }
         } else {
           // Add to current chain group
           currentGroup.steps.push(step)
@@ -1493,15 +1938,17 @@ function applyYamlToStages({ preserveSelection = false } = {}) {
           groupedSteps.push(currentGroup)
           currentGroup = null
         }
-        groupedSteps.push({ steps: [step] })
+        groupedSteps.push({ steps: [step], _ui_position: step._ui_position })
       }
     })
     if (currentGroup) {
       groupedSteps.push(currentGroup)
     }
 
+    const defaultPos = (idx) => ({ x: snapToGrid(GRID_SIZE), y: snapToGrid(GRID_SIZE + idx * 5 * GRID_SIZE) })
+
     // Convert grouped steps into stages
-    const newStages = groupedSteps.map((group) => {
+    const newStages = groupedSteps.map((group, groupIdx) => {
       if (group.chainType) {
         // This is a composite chain stage
         const id = generateId()
@@ -1635,6 +2082,7 @@ function applyYamlToStages({ preserveSelection = false } = {}) {
           id,
           name: group.chainName,
           type: 'command_chain',
+          position: group._ui_position ? { x: group._ui_position.x, y: group._ui_position.y } : defaultPos(groupIdx),
           config: {
             name: group.chainName,
             enabled: true,
@@ -1655,6 +2103,7 @@ function applyYamlToStages({ preserveSelection = false } = {}) {
           id,
           name: stepName,
           type: step.type,
+          position: group._ui_position ? { x: group._ui_position.x, y: group._ui_position.y } : defaultPos(groupIdx),
           config: {
             ...params,
             enabled: step.enabled !== false,
@@ -1926,6 +2375,30 @@ onBeforeRouteLeave((_to, _from, next) => {
 
 onUnmounted(() => {
   stopPolling()
+  window.removeEventListener('resize', updateConnections)
+  if (connectionObserver) connectionObserver.disconnect()
+})
+
+// Keep SVG edges up-to-date when stages change
+let connectionObserver = null
+
+watch(stageEdges, () => {
+  nextTick(() => requestAnimationFrame(() => updateConnections()))
+}, { immediate: true })
+
+watch(stages, () => {
+  nextTick(() => requestAnimationFrame(() => updateConnections()))
+}, { deep: true })
+
+onMounted(() => {
+  window.addEventListener('resize', updateConnections)
+  // Observe the graph container for size changes so edges stay correct
+  nextTick(() => {
+    if (graphContainer.value) {
+      connectionObserver = new ResizeObserver(() => updateConnections())
+      connectionObserver.observe(graphContainer.value)
+    }
+  })
 })
 
 // Check for route params on mount to load a pipeline
@@ -2003,8 +2476,10 @@ onMounted(async () => {
 }
 
 .canvas {
-  padding: 24px;
-  min-height: 500px;
+  padding: 0;
+  min-height: 600px;
+  overflow: auto;
+  position: relative;
 }
 
 .empty-state {
@@ -2012,7 +2487,7 @@ onMounted(async () => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: 400px;
+  min-height: 500px;
   text-align: center;
   color: #94a3b8;
   
@@ -2027,8 +2502,101 @@ onMounted(async () => {
   }
 }
 
-.pipeline-timeline {
-  padding: 16px 0;
+.pipeline-graph {
+  position: relative;
+  min-height: 600px;
+  min-width: 100%;
+  cursor: default;
+  user-select: none;
+  background-image:
+    radial-gradient(circle, rgba(148, 163, 184, 0.18) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+.connection-svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 2;
+  overflow: visible;
+}
+
+.stage-node {
+  position: absolute;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 280px;
+}
+
+.stage-ports {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.stage-ports-in {
+  margin-bottom: 4px;
+}
+
+.stage-ports-out {
+  margin-top: 4px;
+}
+
+.port {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.625rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  cursor: crosshair;
+  transition: box-shadow 0.15s, transform 0.15s;
+
+  &:hover {
+    transform: scale(1.08);
+    box-shadow: 0 0 6px rgba(230, 152, 48, 0.4);
+  }
+}
+
+.port-wiring-target {
+  animation: port-pulse 0.8s ease-in-out infinite alternate;
+}
+
+@keyframes port-pulse {
+  0% { box-shadow: 0 0 4px rgba(230, 152, 48, 0.3); }
+  100% { box-shadow: 0 0 10px rgba(230, 152, 48, 0.7); }
+}
+
+.port-in {
+  background: rgba(230, 152, 48, 0.15);
+  color: #E69830;
+  border: 1px solid rgba(230, 152, 48, 0.35);
+}
+
+.port-out {
+  background: rgba(99, 179, 119, 0.15);
+  color: #63b377;
+  border: 1px solid rgba(99, 179, 119, 0.35);
+}
+
+.port-empty {
+  border-style: dashed;
+  opacity: 0.6;
+}
+
+.port-error {
+  background: rgba(239, 68, 68, 0.15) !important;
+  color: #ef4444 !important;
+  border-color: rgba(239, 68, 68, 0.6) !important;
+  opacity: 1;
 }
 
 .stage-card {
@@ -2036,9 +2604,13 @@ onMounted(async () => {
   border: 1px solid rgba(148, 163, 184, 0.2);
   border-radius: 12px;
   padding: 16px;
-  cursor: pointer;
+  cursor: grab;
   transition: all 0.2s;
-  margin-bottom: 8px;
+  width: 100%;
+
+  &:active {
+    cursor: grabbing;
+  }
   
   &:hover {
     background: rgba(255, 255, 255, 0.05);
@@ -2066,6 +2638,21 @@ onMounted(async () => {
   color: #f1f5f9;
   flex: 1;
   min-width: 0;
+}
+
+.stage-order-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(230, 152, 48, 0.2);
+  color: #E69830;
+  font-size: 0.7rem;
+  font-weight: 700;
+  margin-right: 8px;
+  flex-shrink: 0;
 }
 
 .stage-actions {
