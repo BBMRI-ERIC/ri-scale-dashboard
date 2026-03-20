@@ -209,7 +209,7 @@
                   ref="graphContainer"
                   @mousemove="onCanvasMouseMove"
                   @mouseup="onCanvasMouseUp"
-                  @mouseleave="onCanvasMouseUp"
+                  @mouseleave="cancelWiring"
                 >
                   <!-- SVG overlay for connection lines + wiring preview -->
                   <svg class="connection-svg" ref="connectionSvg">
@@ -889,10 +889,35 @@ function onCardMouseDown(event, stage) {
     origX: stage.position.x,
     origY: stage.position.y,
   }
+  // Attach document-level listeners so dragging works even when the
+  // cursor moves fast and leaves the canvas area.
+  document.addEventListener('mousemove', onDocumentDragMove)
+  document.addEventListener('mouseup', onDocumentDragUp)
+}
+
+function onDocumentDragMove(event) {
+  if (!dragging.value) return
+  const stage = stages.value.find(s => s.id === dragging.value.stageId)
+  if (!stage) return
+  const dx = event.clientX - dragging.value.startX
+  const dy = event.clientY - dragging.value.startY
+  stage.position.x = snapToGrid(dragging.value.origX + dx)
+  stage.position.y = snapToGrid(dragging.value.origY + dy)
+  updateConnections()
+}
+
+function onDocumentDragUp() {
+  if (dragging.value) {
+    dragging.value = null
+    updateConnections()
+  }
+  document.removeEventListener('mousemove', onDocumentDragMove)
+  document.removeEventListener('mouseup', onDocumentDragUp)
 }
 
 function onCanvasMouseMove(event) {
-  // Handle node dragging
+  // Handle node dragging (kept for backward compat, but document-level
+  // listeners now handle most drag scenarios)
   if (dragging.value) {
     const stage = stages.value.find(s => s.id === dragging.value.stageId)
     if (!stage) return
@@ -914,10 +939,7 @@ function onCanvasMouseMove(event) {
 }
 
 function onCanvasMouseUp() {
-  if (dragging.value) {
-    dragging.value = null
-    updateConnections()
-  }
+  // Drag end is handled by document-level onDocumentDragUp
   cancelWiring()
 }
 
@@ -2376,6 +2398,8 @@ onBeforeRouteLeave((_to, _from, next) => {
 onUnmounted(() => {
   stopPolling()
   window.removeEventListener('resize', updateConnections)
+  document.removeEventListener('mousemove', onDocumentDragMove)
+  document.removeEventListener('mouseup', onDocumentDragUp)
   if (connectionObserver) connectionObserver.disconnect()
 })
 
