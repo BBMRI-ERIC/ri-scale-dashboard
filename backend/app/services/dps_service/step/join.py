@@ -51,3 +51,6 @@ class JoinStep(DPSStep):
         except Exception as e:
             logger.error("Error during step %s: %s", self.name, e)
             return False
+        
+    def undo(self) -> bool:
+        return True  # No undo needed for join step

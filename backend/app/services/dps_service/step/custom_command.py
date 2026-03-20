@@ -11,10 +11,11 @@ logger = logging.getLogger(__name__)
 class CustomCommandStep(DPSStep):
     def __init__(self, input_source: source, command: str, fields: list[str] | None = None,
                  execution_mode: str = "per_row", simulated: bool = True,
-                 cancel_event: threading.Event | None = None):
+                 cancel_event: threading.Event | None = None, undo_command: str | None = None):
         super().__init__(command, simulated=simulated)
         self.input_source = input_source
         self.command = command
+        self.undo_command = undo_command
         self.fields = fields if fields is not None else []
         self.execution_mode = execution_mode
         self.cancel_event = cancel_event
@@ -65,7 +66,13 @@ class CustomCommandStep(DPSStep):
 
         logger.info("%sExecuting command per row.", sim_text)
 
-        for _, row in self.input_source.get_data().iterrows():
+        data_frame = self.input_source.get_data()
+        if self.simulated:
+            # In simulation mode, only execute one row to reduce runtime and avoid unknown custom-command outputs.
+            data_frame = data_frame.to_pandas().head(1)
+            logger.info("Simulated per-row mode: running only 1 row out of %d", len(self.input_source.get_data()))
+
+        for _, row in data_frame.iterrows():
             if self._is_cancelled():
                 logger.info("Execution cancelled between rows.")
                 return False
@@ -89,4 +96,16 @@ class CustomCommandStep(DPSStep):
                     logger.error("Command execution failed for values: %s", command_values)
                 return False
 
+        return True
+
+    def undo(self) -> bool:
+        if self.undo_command is None:
+            logger.info("No undo command specified, skipping undo.")
+            return False
+
+        logger.info("Undo: Executing command: '%s' to undo '%s'", self.undo_command, self.command)
+        proc = self.__run_command__(self.undo_command)
+        if proc is None:
+            logger.error("Undo command failed.")
+            return False
         return True

@@ -16,4 +16,12 @@ class DPSStep:
         """
         raise NotImplementedError("Each step must implement the execute method.")
     
+    def undo(self) -> bool:
+        """
+        Undo the data preparation step if possible.
+        Output:
+            bool: True if the undo operation was successful, False otherwise.
+        """
+        return True  # By default, assume undo is successful (or not needed)
+    
 
