@@ -133,7 +133,7 @@ step_types:
           label: "Filename to Column Regex"
           type: "string"
           required_when: "mode == 'discovery'"
-          default: "^(?P<slide_id>.+?)$"
+          default: "^(?P<filename>.+?)$"
           conditional_on: "mode"
           conditional_value: "discovery"
           help_text: "Regex pattern with named groups to extract metadata from filename. Each group becomes a column."
@@ -334,20 +334,19 @@ notes:
 # front-end selectable action. The frontend should substitute any placeholders
 # inside params using values gathered from the user (see user_inputs below).
 command_chains:
+  ###################################################################################################
   dicom_conversion:
     display_name: "Convert to DICOM"
     description: "Runs wsidicomizer per row on a source and loads the generated DICOM directories as a new source."
     icon: "mdi-hospital-box"
     category: "Data Conversion"
-    # Explicit sequence with step instance ids (allows duplicates and disambiguation)
+
     chain:
       - id: run_dicom
         type: custom_command
       - id: load_dicom
         type: load
 
-    # Expose step parameters to the frontend with a consistent shape.
-    # `param` uses dot-notation for nested params (e.g. columns.column_name).
     step_param_exposure:
       - step_id: run_dicom
         param: input_source_name
@@ -457,3 +456,128 @@ command_chains:
         source:
           step_id: run_dicom
           param: input_source_name
+  ###################################################################################################
+  jpeg2000_compression:
+    display_name: "Compress to JPEG2000"
+    description: "Compresses image files to JPEG2000 format"
+    icon: "mdi-hospital-box"
+    category: "Data Compression"
+
+    chain:
+      - id: run_jpeg2000
+        type: custom_command
+      - id: load_jpeg2000
+        type: load
+
+    step_param_exposure:
+      - step_id: run_jpeg2000
+        param: input_source_name
+        label: "Input Source Name"
+        use_registry_source: "sources"
+        visible: true
+        help_text: "Name of the source containing image paths to convert"
+        default: "source1"
+        resolve_timing: form
+
+      - step_id: run_jpeg2000
+        param: command
+        label: "JPEG2000 Compression Command"
+        visible: false
+        help_text: "The command to run JPEG2000 compression. Use per-row placeholders like {image_path} and {image_id}."
+        default: "opj_compress -i {{image_path}} -o {output_dir}/{{image_id}}.j2k -r {compression_ratio}"
+        resolve_timing: runtime
+
+      - step_id: run_jpeg2000
+        param: execution_mode
+        label: "Execution Mode"
+        visible: false
+        default: "per_row"
+        resolve_timing: form
+
+      - step_id: load_jpeg2000
+        param: output_source_name
+        label: "Output Source Name"
+        register_id: "sources"
+        visible: true
+        help_text: "Name for the source to register the JPEG2000 output"
+        default: "jpeg2000_source"
+        resolve_timing: form
+
+      - step_id: load_jpeg2000
+        param: path
+        label: "Input Directory"
+        visible: false
+        help_text: "Directory where JPEG2000 output is stored"
+        default: "{output_dir}"
+        resolve_timing: form
+
+      - step_id: load_jpeg2000
+        param: mode
+        label: "Load Mode"
+        visible: false
+        default: "discovery"
+        resolve_timing: form
+
+      - step_id: load_jpeg2000
+        param: include
+        label: "File Pattern"
+        visible: true
+        default: "*"
+        resolve_timing: form
+
+      - step_id: load_jpeg2000
+        param: directory_mode
+        label: "Directory Mode"
+        visible: false
+        default: true
+        resolve_timing: form
+
+      - step_id: load_jpeg2000
+        param: columns.column_name
+        label: "JPEG2000 Path Column (Output Source)"
+        visible: true
+        default: "jpeg2000_path"
+        resolve_timing: form
+
+      - step_id: load_jpeg2000
+        param: columns.filename_to_columnname
+        label: "JPEG2000 Filename to Column (Regex)"
+        visible: true
+        default: "^(?P<filename>.+)$"
+        resolve_timing: form
+
+    substitutions:
+      - name: output_dir
+        label: "JPEG2000 Output Directory"
+        help_text: "Directory to store generated JPEG2000 output"
+        type: string
+        open_file_dialog: true
+        scope: form
+        default: "./jpeg2000_output"
+
+      - name: image_path
+        label: "Image Path Column (Input Source)"
+        help_text: "Column name in the input source that contains image file paths (per-row)"
+        type: column
+        scope: per_row
+        default: ""
+        source:
+          step_id: run_jpeg2000
+          param: input_source_name
+
+      - name: image_id
+        label: "Image ID Column (Input Source)"
+        help_text: "Column name in the input source that contains image identifiers (per-row)"
+        type: column
+        scope: per_row
+        default: ""
+        source:
+          step_id: run_jpeg2000
+          param: input_source_name
+
+      - name: compression_ratio
+        label: "Compression Ratio"
+        help_text: "Ratio to use for JPEG2000 compression"
+        type: string
+        scope: form
+        default: "20"
